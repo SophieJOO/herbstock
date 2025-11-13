@@ -284,32 +284,59 @@ ${cleanedText}`;
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
-  try {
-    const response = UrlFetchApp.fetch(url, options);
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    Logger.log('=== Gemini API 응답 (입고서) ===');
-    Logger.log('HTTP 상태: ' + responseCode);
-    Logger.log('응답 길이: ' + responseText.length + ' 문자');
-    
-    if (responseCode !== 200) {
-      Logger.log('❌ 전체 응답: ' + responseText);
-      throw new Error(`Gemini API 오류 (HTTP ${responseCode}): ${responseText}`);
-    }
-    
-    const result = JSON.parse(responseText);
-    
-    if (result.error) {
-      throw new Error(`Gemini API 오류: ${result.error.message} (코드: ${result.error.code})`);
-    }
-    
-    if (!result.candidates || !result.candidates[0]) {
-      throw new Error('Gemini API 응답에 candidates가 없습니다.');
-    }
-    
-    const candidate = result.candidates[0];
+
+  // ✅ 재시도 로직 (503 에러 대응)
+  const MAX_RETRIES = 3;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 1) {
+        const waitTime = attempt * 2000; // 2초, 4초, 6초
+        Logger.log(`⏳ ${waitTime/1000}초 대기 후 재시도 (${attempt}/${MAX_RETRIES})...`);
+        Utilities.sleep(waitTime);
+      }
+
+      const response = UrlFetchApp.fetch(url, options);
+      const responseCode = response.getResponseCode();
+      const responseText = response.getContentText();
+
+      Logger.log('=== Gemini API 응답 (입고서) ===');
+      Logger.log('HTTP 상태: ' + responseCode);
+      Logger.log('응답 길이: ' + responseText.length + ' 문자');
+      if (attempt > 1) {
+        Logger.log(`✅ 재시도 ${attempt}번째 성공`);
+      }
+
+      // ✅ 503 에러는 재시도
+      if (responseCode === 503) {
+        Logger.log('⚠️ 503 에러: Gemini API 과부하');
+        lastError = new Error('Gemini API 서버 과부하 (503)');
+        continue; // 재시도
+      }
+
+      if (responseCode !== 200) {
+        Logger.log('❌ 전체 응답: ' + responseText);
+        throw new Error(`Gemini API 오류 (HTTP ${responseCode}): ${responseText}`);
+      }
+
+      const result = JSON.parse(responseText);
+
+      if (result.error) {
+        // 503 에러 체크
+        if (result.error.code === 503) {
+          Logger.log('⚠️ 503 에러: ' + result.error.message);
+          lastError = new Error(`Gemini API 서버 과부하: ${result.error.message}`);
+          continue; // 재시도
+        }
+        throw new Error(`Gemini API 오류: ${result.error.message} (코드: ${result.error.code})`);
+      }
+
+      if (!result.candidates || !result.candidates[0]) {
+        throw new Error('Gemini API 응답에 candidates가 없습니다.');
+      }
+
+      const candidate = result.candidates[0];
 
     // finishReason 확인 - 중단되었는지 체크
     const finishReason = candidate.finishReason || 'UNKNOWN';
@@ -401,18 +428,33 @@ ${cleanedText}`;
       }
       
       Logger.log('✅ JSON 파싱 성공: ' + parsed.items.length + '개 항목');
-      return parsed;
-      
+      return parsed;  // ✅ 성공 - 재시도 루프 탈출
+
     } catch (parseError) {
       Logger.log('❌ JSON 파싱 오류: ' + parseError.message);
       Logger.log('파싱 시도한 JSON: ' + jsonText);
       throw new Error(`JSON 파싱 실패: ${parseError.message}`);
     }
-    
-  } catch (error) {
-    Logger.log('❌ Gemini API 호출 전체 오류: ' + error.message);
-    throw error;
+
+    } catch (error) {
+      // 503 에러는 재시도, 다른 에러는 즉시 throw
+      if (error.message && error.message.includes('503')) {
+        lastError = error;
+        Logger.log(`⚠️ 시도 ${attempt}/${MAX_RETRIES} 실패: ${error.message}`);
+        if (attempt < MAX_RETRIES) {
+          continue; // 재시도
+        }
+      } else {
+        // 503이 아닌 다른 에러는 즉시 throw
+        Logger.log('❌ Gemini API 호출 오류 (재시도 불가): ' + error.message);
+        throw error;
+      }
+    }
   }
+
+  // 모든 재시도 실패
+  Logger.log(`❌ ${MAX_RETRIES}번 재시도 모두 실패`);
+  throw lastError || new Error('Gemini API 호출 실패');
 }
 
 /**
@@ -968,30 +1010,57 @@ ${cleanedText}`;
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
-  try {
-    const response = UrlFetchApp.fetch(url, options);
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    Logger.log('=== Gemini API 응답 (처방전) ===');
-    Logger.log('HTTP 상태: ' + responseCode);
-    Logger.log('응답 길이: ' + responseText.length + ' 문자');
-    
-    if (responseCode !== 200) {
-      Logger.log('❌ 전체 응답: ' + responseText);
-      throw new Error(`Gemini API 오류 (HTTP ${responseCode}): ${responseText}`);
-    }
-    
-    const result = JSON.parse(responseText);
-    
-    if (result.error) {
-      throw new Error(`Gemini API 오류: ${result.error.message} (코드: ${result.error.code})`);
-    }
-    
-    if (!result.candidates || !result.candidates[0]) {
-      throw new Error('Gemini API 응답에 candidates가 없습니다.');
-    }
+
+  // ✅ 재시도 로직 (503 에러 대응)
+  const MAX_RETRIES = 3;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 1) {
+        const waitTime = attempt * 2000; // 2초, 4초, 6초
+        Logger.log(`⏳ ${waitTime/1000}초 대기 후 재시도 (${attempt}/${MAX_RETRIES})...`);
+        Utilities.sleep(waitTime);
+      }
+
+      const response = UrlFetchApp.fetch(url, options);
+      const responseCode = response.getResponseCode();
+      const responseText = response.getContentText();
+
+      Logger.log('=== Gemini API 응답 (처방전) ===');
+      Logger.log('HTTP 상태: ' + responseCode);
+      Logger.log('응답 길이: ' + responseText.length + ' 문자');
+      if (attempt > 1) {
+        Logger.log(`✅ 재시도 ${attempt}번째 성공`);
+      }
+
+      // ✅ 503 에러는 재시도
+      if (responseCode === 503) {
+        Logger.log('⚠️ 503 에러: Gemini API 과부하');
+        lastError = new Error('Gemini API 서버 과부하 (503)');
+        continue; // 재시도
+      }
+
+      if (responseCode !== 200) {
+        Logger.log('❌ 전체 응답: ' + responseText);
+        throw new Error(`Gemini API 오류 (HTTP ${responseCode}): ${responseText}`);
+      }
+
+      const result = JSON.parse(responseText);
+
+      if (result.error) {
+        // 503 에러 체크
+        if (result.error.code === 503) {
+          Logger.log('⚠️ 503 에러: ' + result.error.message);
+          lastError = new Error(`Gemini API 서버 과부하: ${result.error.message}`);
+          continue; // 재시도
+        }
+        throw new Error(`Gemini API 오류: ${result.error.message} (코드: ${result.error.code})`);
+      }
+
+      if (!result.candidates || !result.candidates[0]) {
+        throw new Error('Gemini API 응답에 candidates가 없습니다.');
+      }
     
     const candidate = result.candidates[0];
 
@@ -1105,19 +1174,34 @@ ${cleanedText}`;
       Logger.log(`  - 처방: ${parsed.prescriptionName} (${parsed.cheops}첩)`);
       Logger.log(`  - 처방의: ${parsed.doctorName}`);
       Logger.log(`  - 약재: ${parsed.herbs.length}개`);
-      
-      return parsed;
-      
+
+      return parsed;  // ✅ 성공 - 재시도 루프 탈출
+
     } catch (parseError) {
       Logger.log('❌ JSON 파싱 오류: ' + parseError.message);
       Logger.log('파싱 시도한 JSON 앞부분: ' + jsonText.substring(0, 500));
       throw new Error(`JSON 파싱 실패: ${parseError.message}`);
     }
-    
-  } catch (error) {
-    Logger.log('❌ Gemini API 호출 전체 오류: ' + error.message);
-    throw error;
+
+    } catch (error) {
+      // 503 에러는 재시도, 다른 에러는 즉시 throw
+      if (error.message && error.message.includes('503')) {
+        lastError = error;
+        Logger.log(`⚠️ 시도 ${attempt}/${MAX_RETRIES} 실패: ${error.message}`);
+        if (attempt < MAX_RETRIES) {
+          continue; // 재시도
+        }
+      } else {
+        // 503이 아닌 다른 에러는 즉시 throw
+        Logger.log('❌ Gemini API 호출 오류 (재시도 불가): ' + error.message);
+        throw error;
+      }
+    }
   }
+
+  // 모든 재시도 실패
+  Logger.log(`❌ ${MAX_RETRIES}번 재시도 모두 실패`);
+  throw lastError || new Error('Gemini API 호출 실패');
 }
 
 /**
