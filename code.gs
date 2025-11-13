@@ -214,7 +214,21 @@ function parseIncomingDraftWithGemini(ocrText, fileName) {
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
   }
-  
+
+  // ✅ OCR 텍스트 전처리 (불필요한 부분 제거)
+  let cleanedText = ocrText;
+
+  // 1. 연속된 공백/줄바꿈 정리
+  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+
+  // 2. 텍스트가 너무 길면 처음 5000자만 사용 (입고서는 보통 짧음)
+  if (cleanedText.length > 5000) {
+    Logger.log(`⚠️ OCR 텍스트가 ${cleanedText.length}자로 너무 깁니다. 5000자로 제한합니다.`);
+    cleanedText = cleanedText.substring(0, 5000);
+  }
+
+  Logger.log(`📊 OCR 텍스트 길이: ${cleanedText.length}자`);
+
   const prompt = `한의원 약재 입고서 OCR 텍스트를 분석하여 JSON으로 변환하세요.
 
 아래 JSON 형식으로만 응답하세요 (설명 없이 JSON만):
@@ -237,7 +251,7 @@ confidence: high/medium/low 중 선택
 반드시 완전한 JSON 출력, 끝에 ] } 닫기
 
 OCR 텍스트:
-${ocrText}`;
+${cleanedText}`;
 
   // ✅ 토큰 수 증가 + 더 안정적인 모델
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -288,16 +302,27 @@ ${ocrText}`;
     }
     
     const candidate = result.candidates[0];
-    
+
     // finishReason 확인 - 중단되었는지 체크
-    if (candidate.finishReason) {
-      Logger.log(`📌 종료 이유: ${candidate.finishReason}`);
-      if (candidate.finishReason === 'MAX_TOKENS') {
-        Logger.log('⚠️ 토큰 제한으로 응답이 잘렸습니다. 복구 시도...');
+    const finishReason = candidate.finishReason || 'UNKNOWN';
+    Logger.log(`📌 종료 이유: ${finishReason}`);
+
+    // MAX_TOKENS로 잘렸고 content가 없거나 너무 짧으면 재시도
+    if (finishReason === 'MAX_TOKENS') {
+      Logger.log('⚠️ 토큰 제한으로 응답이 잘렸습니다.');
+
+      // content가 없거나 비어있으면 에러
+      if (!candidate.content || !candidate.content.parts || !candidate.content.parts[0] || !candidate.content.parts[0].text) {
+        Logger.log('❌ MAX_TOKENS이지만 응답 내용이 없습니다. OCR 텍스트가 너무 길거나 복잡합니다.');
+        throw new Error('Gemini 토큰 제한 초과: OCR 텍스트가 너무 길어 처리할 수 없습니다. 이미지를 더 깔끔하게 찍어주세요.');
       }
+
+      // 응답이 있지만 잘렸다면 복구 시도
+      Logger.log('⚠️ 응답이 잘렸지만 일부 내용이 있습니다. 복구 시도...');
     }
-    
+
     if (!candidate.content || !candidate.content.parts || !candidate.content.parts[0]) {
+      Logger.log('❌ 응답 구조: ' + JSON.stringify(candidate));
       throw new Error('Gemini API 응답 구조가 올바르지 않습니다.');
     }
     
