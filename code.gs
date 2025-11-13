@@ -3057,8 +3057,8 @@ function onOpen() {
     .addItem('💰 전체 처방 원가 업데이트', 'updateAllPrescriptionCosts')
     .addSeparator()
     .addSubMenu(ui.createMenu('📸 드라이브 OCR')
-      .addItem('📋 처방전 OCR 처리', 'processNewPrescriptions')
-      .addItem('📦 입고서 OCR 처리', 'processNewIncomingDocs')
+      .addItem('📋 처방전 OCR 처리', 'processPrescriptionImages')
+      .addItem('📦 입고서 OCR 처리', 'processIncomingImagesOCR')
       .addItem('🔄 전체 OCR 처리', 'processAllDriveFiles')
       .addSeparator()
       .addItem('📁 드라이브 폴더 설정', 'setupDriveFolders')
@@ -3192,244 +3192,6 @@ function getDriveFolderId(type) {
 }
 
 /**
- * 처방전 자동 OCR 처리
- */
-function processNewPrescriptions() {
-  Logger.log('=== 처방전 자동 OCR 시작 ===\n');
-  
-  const waitFolderId = getDriveFolderId('presc_wait');
-  const doneFolderId = getDriveFolderId('presc_done');
-  
-  if (!waitFolderId || !doneFolderId) {
-    Browser.msgBox(
-      '설정 필요',
-      '드라이브 폴더가 설정되지 않았습니다.\n\n메뉴: 🏥 약재관리 > 📁 드라이브 폴더 설정',
-      Browser.Buttons.OK
-    );
-    return;
-  }
-  
-  try {
-    const waitFolder = DriveApp.getFolderById(waitFolderId);
-    const doneFolder = DriveApp.getFolderById(doneFolderId);
-    
-    // 이미지 파일만 가져오기
-    const files = waitFolder.getFiles();
-    let processedCount = 0;
-    let errorCount = 0;
-    const errors = [];
-    
-    while (files.hasNext()) {
-      const file = files.next();
-      const mimeType = file.getMimeType();
-      
-      // 이미지 파일만 처리
-      if (mimeType.startsWith('image/')) {
-        Logger.log(`\n📄 처리 중: ${file.getName()}`);
-        
-        try {
-          // OCR 처리
-          const ocrText = performOCR(file);
-          
-          if (!ocrText) {
-            throw new Error('OCR 실패');
-          }
-          
-          Logger.log('✅ OCR 완료');
-          
-          // Gemini로 파싱
-          const parsedData = parsePrescriptionWithGemini(ocrText);
-          
-          if (!parsedData || !parsedData.patientName) {
-            throw new Error('파싱 실패');
-          }
-          
-          Logger.log(`✅ 파싱 완료: ${parsedData.patientName}`);
-          
-          // 처방입력 시트에 추가
-          const prescNumber = addPrescriptionToSheet(parsedData);
-          
-          // 처방상세 시트에 추가
-          addPrescriptionDetailsToSheet(prescNumber, parsedData);
-          
-          Logger.log(`✅ 시트 추가 완료: ${prescNumber}`);
-          
-          // 파일을 완료 폴더로 이동
-          file.moveTo(doneFolder);
-          Logger.log(`✅ 파일 이동 완료`);
-          
-          processedCount++;
-          
-        } catch (error) {
-          Logger.log(`❌ 오류: ${error.message}`);
-          errorCount++;
-          errors.push(`${file.getName()}: ${error.message}`);
-        }
-      }
-    }
-    
-    Logger.log(`\n=== 처방전 OCR 완료 ===`);
-    Logger.log(`✅ 성공: ${processedCount}개`);
-    Logger.log(`❌ 실패: ${errorCount}개`);
-    
-    // 결과 알림
-    let message = `처방전 OCR 완료\n\n✅ 성공: ${processedCount}개\n❌ 실패: ${errorCount}개`;
-    
-    if (errorCount > 0) {
-      message += '\n\n실패 목록:\n' + errors.join('\n');
-    }
-    
-    if (processedCount === 0 && errorCount === 0) {
-      message = '처리할 새 처방전이 없습니다.';
-    }
-    
-    Browser.msgBox('완료', message, Browser.Buttons.OK);
-    
-  } catch (error) {
-    Logger.log(`❌ 폴더 접근 오류: ${error.message}`);
-    Browser.msgBox(
-      '오류',
-      `폴더에 접근할 수 없습니다.\n\n${error.message}\n\n폴더 ID를 확인하세요.`,
-      Browser.Buttons.OK
-    );
-  }
-}
-
-/**
- * 입고서 자동 OCR 처리
- */
-function processNewIncomingDocs() {
-  Logger.log('=== 입고서 자동 OCR 시작 ===\n');
-  
-  const waitFolderId = getDriveFolderId('inc_wait');
-  const doneFolderId = getDriveFolderId('inc_done');
-  
-  if (!waitFolderId || !doneFolderId) {
-    Browser.msgBox(
-      '설정 필요',
-      '드라이브 폴더가 설정되지 않았습니다.\n\n메뉴: 🏥 약재관리 > 📁 드라이브 폴더 설정',
-      Browser.Buttons.OK
-    );
-    return;
-  }
-  
-  try {
-    const waitFolder = DriveApp.getFolderById(waitFolderId);
-    const doneFolder = DriveApp.getFolderById(doneFolderId);
-    
-    const files = waitFolder.getFiles();
-    let processedCount = 0;
-    let errorCount = 0;
-    const errors = [];
-    
-    while (files.hasNext()) {
-      const file = files.next();
-      const mimeType = file.getMimeType();
-      
-      if (mimeType.startsWith('image/')) {
-        Logger.log(`\n📄 처리 중: ${file.getName()}`);
-        
-        try {
-          // OCR 처리
-          const ocrText = performOCR(file);
-          
-          if (!ocrText) {
-            throw new Error('OCR 실패');
-          }
-          
-          Logger.log('✅ OCR 완료');
-          
-          // Gemini로 파싱 (입고서용)
-          const parsedData = parseIncomingWithGemini(ocrText);
-          
-          if (!parsedData || !parsedData.herbName) {
-            throw new Error('파싱 실패');
-          }
-          
-          Logger.log(`✅ 파싱 완료: ${parsedData.herbName}`);
-          
-          // 임시입고 시트에 추가
-          addToTempIncoming(parsedData);
-          
-          Logger.log(`✅ 시트 추가 완료`);
-          
-          // 파일을 완료 폴더로 이동
-          file.moveTo(doneFolder);
-          Logger.log(`✅ 파일 이동 완료`);
-          
-          processedCount++;
-          
-        } catch (error) {
-          Logger.log(`❌ 오류: ${error.message}`);
-          errorCount++;
-          errors.push(`${file.getName()}: ${error.message}`);
-        }
-      }
-    }
-    
-    Logger.log(`\n=== 입고서 OCR 완료 ===`);
-    Logger.log(`✅ 성공: ${processedCount}개`);
-    Logger.log(`❌ 실패: ${errorCount}개`);
-    
-    let message = `입고서 OCR 완료\n\n✅ 성공: ${processedCount}개\n❌ 실패: ${errorCount}개`;
-    
-    if (errorCount > 0) {
-      message += '\n\n실패 목록:\n' + errors.join('\n');
-    }
-    
-    if (processedCount === 0 && errorCount === 0) {
-      message = '처리할 새 입고서가 없습니다.';
-    }
-    
-    Browser.msgBox('완료', message, Browser.Buttons.OK);
-    
-  } catch (error) {
-    Logger.log(`❌ 폴더 접근 오류: ${error.message}`);
-    Browser.msgBox(
-      '오류',
-      `폴더에 접근할 수 없습니다.\n\n${error.message}\n\n폴더 ID를 확인하세요.`,
-      Browser.Buttons.OK
-    );
-  }
-}
-
-/**
- * OCR 수행 (구글 드라이브 API 사용)
- */
-function performOCR(file) {
-  try {
-    const fileId = file.getId();
-    const blob = file.getBlob();
-    
-    // 구글 독스로 변환하여 OCR (mimeType 제거!)
-    const resource = {
-      title: file.getName() + '_ocr'
-      // mimeType 제거 - 자동으로 OCR 처리됨
-    };
-    
-    const doc = Drive.Files.insert(resource, blob, {
-      ocr: true,
-      ocrLanguage: 'ko',
-      convert: true  // 이미지를 구글 독스로 변환
-    });
-    
-    // 텍스트 추출
-    const docId = doc.id;
-    const docFile = DocumentApp.openById(docId);
-    const text = docFile.getBody().getText();
-    
-    // 임시 문서 삭제
-    DriveApp.getFileById(docId).setTrashed(true);
-    
-    return text;
-    
-  } catch (error) {
-    Logger.log(`OCR 오류: ${error.message}`);
-    return null;
-  }
-}
-
-/**
  * 드라이브 폴더 확인
  */
 function checkDriveFolders() {
@@ -3504,13 +3266,13 @@ function processAllDriveFiles() {
   }
   
   // 처방전 처리
-  processNewPrescriptions();
-  
+  processPrescriptionImages();
+
   // 잠시 대기
   Utilities.sleep(2000);
-  
+
   // 입고서 처리
-  processNewIncomingDocs();
+  processIncomingImagesOCR();
 }
 
 /**
