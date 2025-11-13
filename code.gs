@@ -218,16 +218,23 @@ function parseIncomingDraftWithGemini(ocrText, fileName) {
   // ✅ OCR 텍스트 전처리 (불필요한 부분 제거)
   let cleanedText = ocrText;
 
+  Logger.log(`📊 원본 OCR 텍스트 길이: ${cleanedText.length}자`);
+
   // 1. 연속된 공백/줄바꿈 정리
   cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
 
-  // 2. 텍스트가 너무 길면 처음 5000자만 사용 (입고서는 보통 짧음)
-  if (cleanedText.length > 5000) {
-    Logger.log(`⚠️ OCR 텍스트가 ${cleanedText.length}자로 너무 깁니다. 5000자로 제한합니다.`);
-    cleanedText = cleanedText.substring(0, 5000);
+  // 2. 특수문자 제거 (한글, 숫자, 기본 구두점만 남김)
+  cleanedText = cleanedText.replace(/[^\u3131-\u318E\uAC00-\uD7A3a-zA-Z0-9\s\.,:\-\/]/g, '');
+
+  // 3. 텍스트가 너무 길면 제한 (단계적 제한)
+  const MAX_LENGTH = 3000;  // 5000 → 3000으로 더 줄임
+
+  if (cleanedText.length > MAX_LENGTH) {
+    Logger.log(`⚠️ OCR 텍스트가 ${cleanedText.length}자로 너무 깁니다. ${MAX_LENGTH}자로 제한합니다.`);
+    cleanedText = cleanedText.substring(0, MAX_LENGTH);
   }
 
-  Logger.log(`📊 OCR 텍스트 길이: ${cleanedText.length}자`);
+  Logger.log(`📊 정리된 OCR 텍스트 길이: ${cleanedText.length}자`);
 
   const prompt = `한의원 약재 입고서 OCR 텍스트를 분석하여 JSON으로 변환하세요.
 
