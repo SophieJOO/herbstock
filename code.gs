@@ -705,7 +705,15 @@ function moveToIncomingSheet(row) {
   }
   
   Logger.log(`✅ 입고 완료: ${herbName} ${quantity}봉 (총 ${bagSize * quantity}g)`);
-  
+
+  // 💰 가격 변동 체크 및 알림
+  try {
+    checkAndNotifyPriceChange(herbName, pricePerGram, supplier);
+  } catch (priceCheckError) {
+    Logger.log(`⚠️ 가격 변동 체크 중 오류: ${priceCheckError.message}`);
+    // 가격 체크 실패해도 입고는 계속 진행
+  }
+
   // 임시입고 시트에서 해당 행 삭제
   tempSheet.deleteRow(row);
   
@@ -828,6 +836,171 @@ function parseExpiryDates(expiryDateInput, quantity) {
   }
   
   return expiryDates;
+}
+
+/**
+ * 이전 단가 조회 (약재입고 시트에서 최근 입고 단가)
+ */
+function getPreviousPrice(herbName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const incomingSheet = ss.getSheetByName('약재입고');
+
+  if (!incomingSheet) {
+    return null;
+  }
+
+  const data = incomingSheet.getDataRange().getValues();
+
+  // 뒤에서부터 검색 (최근 입고)
+  for (let i = data.length - 1; i >= 1; i--) {
+    const rowHerbName = data[i][2];  // C열: 약재명
+    const pricePerGram = parseFloat(data[i][6]);  // G열: 단가(원/g)
+
+    if (rowHerbName === herbName && pricePerGram > 0) {
+      return {
+        pricePerGram: pricePerGram,
+        incomingDate: data[i][1],  // B열: 입고일
+        supplier: data[i][7]  // H열: 공급처
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 가격이력 시트에 변동 기록
+ */
+function recordPriceChange(herbName, previousPrice, newPrice, supplier, changePercent) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let priceHistorySheet = ss.getSheetByName('가격이력');
+
+  // 가격이력 시트가 없으면 생성
+  if (!priceHistorySheet) {
+    priceHistorySheet = ss.insertSheet('가격이력');
+
+    const headers = [
+      '변동일시', '약재명', '이전단가(원/g)', '신규단가(원/g)',
+      '변동금액(원/g)', '변동률(%)', '공급처', '비고'
+    ];
+    priceHistorySheet.appendRow(headers);
+
+    const headerRange = priceHistorySheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#f4b400');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+  }
+
+  const currentDate = new Date();
+  const priceChange = newPrice - previousPrice;
+  const changeDirection = priceChange > 0 ? '⬆️ 상승' : '⬇️ 하락';
+
+  priceHistorySheet.appendRow([
+    currentDate,
+    herbName,
+    previousPrice,
+    newPrice,
+    priceChange,
+    changePercent,
+    supplier,
+    changeDirection
+  ]);
+
+  // 변동률에 따라 색상 구분
+  const lastRow = priceHistorySheet.getLastRow();
+  const changePercentCell = priceHistorySheet.getRange(lastRow, 6);
+
+  if (Math.abs(changePercent) >= 20) {
+    changePercentCell.setBackground('#f4cccc');  // 20% 이상: 빨강
+  } else if (Math.abs(changePercent) >= 10) {
+    changePercentCell.setBackground('#fff2cc');  // 10% 이상: 노랑
+  }
+
+  Logger.log(`✅ 가격이력 기록: ${herbName} ${changePercent}% ${changeDirection}`);
+}
+
+/**
+ * 단가 변동 체크 및 슬랙 알림
+ */
+function checkAndNotifyPriceChange(herbName, newPricePerGram, supplier) {
+  const previousInfo = getPreviousPrice(herbName);
+
+  if (!previousInfo) {
+    Logger.log(`ℹ️ ${herbName}: 첫 입고 - 가격 비교 없음`);
+    return;
+  }
+
+  const previousPrice = previousInfo.pricePerGram;
+  const priceChange = newPricePerGram - previousPrice;
+  const changePercent = ((priceChange / previousPrice) * 100).toFixed(1);
+
+  Logger.log(`💰 ${herbName} 단가 비교:`);
+  Logger.log(`   이전: ${previousPrice}원/g`);
+  Logger.log(`   신규: ${newPricePerGram}원/g`);
+  Logger.log(`   변동: ${priceChange > 0 ? '+' : ''}${priceChange}원/g (${changePercent}%)`);
+
+  // 5% 이상 변동 시 알림 및 기록
+  const ALERT_THRESHOLD = 5;
+
+  if (Math.abs(parseFloat(changePercent)) >= ALERT_THRESHOLD) {
+    Logger.log(`⚠️ ${ALERT_THRESHOLD}% 이상 변동 감지 - 슬랙 알림 발송`);
+
+    // 슬랙 알림
+    const emoji = priceChange > 0 ? '📈' : '📉';
+    const direction = priceChange > 0 ? '상승' : '하락';
+    const color = priceChange > 0 ? '#ea4335' : '#34a853';
+
+    const message = {
+      text: `${emoji} *단가 변동 알림*`,
+      attachments: [{
+        color: color,
+        fields: [
+          {
+            title: '약재명',
+            value: herbName,
+            short: true
+          },
+          {
+            title: '공급처',
+            value: supplier,
+            short: true
+          },
+          {
+            title: '이전 단가',
+            value: `${previousPrice}원/g`,
+            short: true
+          },
+          {
+            title: '신규 단가',
+            value: `${newPricePerGram}원/g`,
+            short: true
+          },
+          {
+            title: '변동금액',
+            value: `${priceChange > 0 ? '+' : ''}${priceChange}원/g`,
+            short: true
+          },
+          {
+            title: '변동률',
+            value: `${priceChange > 0 ? '+' : ''}${changePercent}% ${direction}`,
+            short: true
+          }
+        ],
+        footer: '가격이력 시트에서 전체 이력 확인 가능',
+        ts: Math.floor(Date.now() / 1000)
+      }]
+    };
+
+    try {
+      sendSlackAlert(JSON.stringify(message));
+      Logger.log(`✅ 슬랙 알림 발송 완료`);
+    } catch (error) {
+      Logger.log(`⚠️ 슬랙 알림 실패: ${error.message}`);
+    }
+
+    // 가격이력 기록
+    recordPriceChange(herbName, previousPrice, newPricePerGram, supplier, parseFloat(changePercent));
+  }
 }
 
 /**
