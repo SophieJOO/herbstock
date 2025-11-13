@@ -1102,27 +1102,49 @@ ${cleanedText}`;
 
     let jsonText;
 
-    // ✅ JSON 복구 로직 (입고서와 유사)
+    // ✅ JSON 복구 로직 (강화)
     if (jsonEnd === -1 || jsonEnd < jsonStart) {
       Logger.log('⚠️ JSON이 불완전합니다. 자동 복구 시도...');
 
       jsonText = textContent.substring(jsonStart);
 
-      // herbs 배열이 닫히지 않은 경우 처리
+      // 1. 불완전한 마지막 항목 제거
       const lastComma = jsonText.lastIndexOf(',');
       const lastCloseBrace = jsonText.lastIndexOf('}');
+      const lastCloseBracket = jsonText.lastIndexOf(']');
 
-      if (lastCloseBrace !== -1 && lastComma > lastCloseBrace) {
-        jsonText = jsonText.substring(0, lastCloseBrace + 1);
+      // herbs 배열 내 마지막 완전한 객체까지만 사용
+      if (lastCloseBrace !== -1) {
+        // 마지막 }가 herbs 배열 안에 있는지 확인
+        const herbsStart = jsonText.indexOf('"herbs"');
+        if (herbsStart !== -1 && lastCloseBrace > herbsStart) {
+          // 마지막 } 이후의 불완전한 부분 제거
+          if (lastComma > lastCloseBrace) {
+            jsonText = jsonText.substring(0, lastCloseBrace + 1);
+          }
+        }
       }
 
-      if (jsonText.includes('"herbs"') && jsonText.lastIndexOf(']') < jsonText.lastIndexOf('[')) {
-        jsonText += '\n  ]\n}';
-      } else if (!jsonText.endsWith('}')) {
+      // 2. herbs 배열 닫기
+      if (jsonText.includes('"herbs"')) {
+        const herbsArrayStart = jsonText.indexOf('"herbs"');
+        const bracketAfterHerbs = jsonText.indexOf('[', herbsArrayStart);
+
+        if (bracketAfterHerbs !== -1 && jsonText.lastIndexOf(']') < bracketAfterHerbs) {
+          // herbs 배열이 열렸지만 닫히지 않음
+          jsonText += '\n  ]\n}';
+          Logger.log('✅ herbs 배열 자동 닫기');
+        } else if (!jsonText.trim().endsWith('}')) {
+          // herbs 배열은 닫혔지만 전체 객체가 안 닫힘
+          jsonText += '\n}';
+          Logger.log('✅ 전체 객체 자동 닫기');
+        }
+      } else if (!jsonText.trim().endsWith('}')) {
         jsonText += '\n}';
       }
 
       Logger.log('✅ 복구된 JSON (처음 500자): ' + jsonText.substring(0, 500));
+      Logger.log('✅ 복구된 JSON (마지막 200자): ' + jsonText.substring(Math.max(0, jsonText.length - 200)));
     } else {
       jsonText = textContent.substring(jsonStart, jsonEnd + 1);
     }
@@ -1132,35 +1154,44 @@ ${cleanedText}`;
     try {
       const parsed = JSON.parse(jsonText);
       
-      // 데이터 검증
+      // ✅ 데이터 검증 (관대하게)
       if (!parsed.herbs || !Array.isArray(parsed.herbs) || parsed.herbs.length === 0) {
         throw new Error('약재 항목이 없습니다.');
       }
-      
+
+      // ⚠️ 중요 필드 체크 (경고만, 에러 아님)
       if (!parsed.patientName) {
-        throw new Error('환자명이 없습니다.');
+        Logger.log('⚠️ 환자명이 없습니다. "미상"으로 설정합니다.');
+        parsed.patientName = '미상';
       }
-      
+
       if (!parsed.cheops || parsed.cheops <= 0) {
-        throw new Error('첩수가 올바르지 않습니다.');
+        Logger.log('⚠️ 첩수가 없거나 올바르지 않습니다. 기본값 1로 설정합니다.');
+        parsed.cheops = 1;
       }
-      
+
       // 기본값 설정
       parsed.prescriptionNumber = parsed.prescriptionNumber || '';
       parsed.prescriptionDate = parsed.prescriptionDate || new Date().toISOString().split('T')[0];
-      parsed.prescriptionName = parsed.prescriptionName || '';
+      parsed.prescriptionName = parsed.prescriptionName || '처방명 미상';
       parsed.chartNumber = parsed.chartNumber || '';
       parsed.gender = parsed.gender || '';
       parsed.age = parsed.age || null;
       parsed.birthDate = parsed.birthDate || '';
       parsed.doctorName = parsed.doctorName || '';
       parsed.clinicName = parsed.clinicName || '';
-      
-      // 총 용량 계산 추가
-      parsed.herbs = parsed.herbs.map(herb => ({
-        ...herb,
-        totalAmount: herb.amountPerCheop * parsed.cheops
+
+      // ✅ 약재 항목 안전 처리
+      parsed.herbs = parsed.herbs.filter(herb => herb.name).map(herb => ({
+        name: herb.name,
+        amountPerCheop: parseFloat(herb.amountPerCheop) || 0,
+        totalAmount: (parseFloat(herb.amountPerCheop) || 0) * parsed.cheops
       }));
+
+      // 빈 약재 항목 제거 후 재확인
+      if (parsed.herbs.length === 0) {
+        throw new Error('유효한 약재 항목이 없습니다.');
+      }
       
       // 약재 목록을 문자열로 변환 (처방입력 시트용)
       parsed.herbsList = parsed.herbs.map(h => h.name).join(', ');
