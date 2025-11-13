@@ -1327,7 +1327,10 @@ function addPrescriptionToSheet(parsedData) {
 /**
  * 처방상세 시트 편집 시 자동 조제 처리
  */
-function onPrescriptionEdit_DISABLED(e) {
+/**
+ * 처방상세 시트 편집 트리거 (조제완료 체크)
+ */
+function onPrescriptionEdit(e) {
   try {
     if (!e || !e.source) {
       Logger.log('⚠️ 이 함수는 자동 트리거로만 실행됩니다.');
