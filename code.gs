@@ -855,13 +855,20 @@ function processPrescriptionImages() {
         Logger.log('파싱 결과: ' + JSON.stringify(parsedData));
 
         if (parsedData && parsedData.herbs) {
-          addPrescriptionToSheet(parsedData);
+          // 처방입력 시트에 추가 (처방번호 반환)
+          const prescNumber = addPrescriptionToSheet(parsedData);
+
+          // 처방상세 시트에 추가 (약재 목록)
+          addPrescriptionDetailsToSheet(prescNumber, parsedData);
 
           const processedFolder = getOrCreateFolder(folder, '처리완료');
           file.moveTo(processedFolder);
 
           processedCount++;
           Logger.log('✅ 처방 입력 완료: ' + file.getName());
+          Logger.log(`   - 처방번호: ${prescNumber}`);
+          Logger.log(`   - 환자: ${parsedData.patientName}`);
+          Logger.log(`   - 약재: ${parsedData.herbs.length}개`);
 
           sendPrescriptionProcessedSlack(parsedData);
         }
