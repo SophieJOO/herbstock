@@ -113,14 +113,15 @@ function processIncomingImagesOCR() {
     Logger.log('설정 시트에 "입고서_폴더_ID" 항목을 추가해주세요.');
     return;
   }
-  
+
   const folder = DriveApp.getFolderById(folderId);
   const files = folder.getFiles();
-  
+
   let processedCount = 0;
   let errorCount = 0;
-  
-  while (files.hasNext()) {
+  const MAX_FILES_PER_RUN = 10;  // ✅ 한 번에 최대 10개만 처리
+
+  while (files.hasNext() && (processedCount + errorCount) < MAX_FILES_PER_RUN) {
     const file = files.next();
     const mimeType = file.getMimeType();
     
@@ -831,45 +832,46 @@ function processPrescriptionImages() {
     Logger.log('설정 시트에 "처방전_폴더_ID" 항목을 추가해주세요.');
     return;
   }
-  
+
   const folder = DriveApp.getFolderById(folderId);
   const files = folder.getFiles();
-  
+
   let processedCount = 0;
   let errorCount = 0;
-  
-  while (files.hasNext()) {
+  const MAX_FILES_PER_RUN = 10;  // ✅ 한 번에 최대 10개만 처리
+
+  while (files.hasNext() && (processedCount + errorCount) < MAX_FILES_PER_RUN) {
     const file = files.next();
     const mimeType = file.getMimeType();
-    
+
     if (mimeType.includes('image')) {
       try {
         Logger.log('📋 처방전 OCR 처리 중: ' + file.getName());
-        
+
         const ocrText = extractTextFromImage(file);
         Logger.log('OCR 결과:\n' + ocrText);
-        
+
         const parsedData = parsePrescriptionWithGemini(ocrText);
         Logger.log('파싱 결과: ' + JSON.stringify(parsedData));
-        
+
         if (parsedData && parsedData.herbs) {
           addPrescriptionToSheet(parsedData);
-          
+
           const processedFolder = getOrCreateFolder(folder, '처리완료');
           file.moveTo(processedFolder);
-          
+
           processedCount++;
           Logger.log('✅ 처방 입력 완료: ' + file.getName());
-          
+
           sendPrescriptionProcessedSlack(parsedData);
         }
-        
+
       } catch (error) {
         Logger.log('❌ 처방 OCR 오류: ' + error.message);
         errorCount++;
-        
+
         logError(file.getName(), error.message);
-        
+
         const errorFolder = getOrCreateFolder(folder, '오류');
         file.moveTo(errorFolder);
       }
@@ -889,40 +891,35 @@ function parsePrescriptionWithGemini(ocrText) {
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
   }
-  
-  const prompt = `다음은 한의원 처방전의 OCR 텍스트입니다.
-이 처방전에서 환자 정보, 처방 정보, 약재 정보를 최대한 상세하게 추출해주세요.
 
-** 중요: 반드시 유효한 JSON 형식으로만 응답하세요. 절대 중간에 끊지 마세요. **
+  // ✅ OCR 텍스트 전처리 (입고서와 동일)
+  let cleanedText = ocrText;
 
-** 추출할 정보 **
+  Logger.log(`📊 원본 OCR 텍스트 길이: ${cleanedText.length}자`);
 
-1. 처방전 기본 정보:
-   - prescriptionNumber: 처방전 번호 (예: #.19357 → "19357", 없으면 빈 문자열)
-   - prescriptionDate: 작성일자를 YYYY-MM-DD 형식으로 (예: 2025-10-20)
-   - prescriptionName: 처방명 (예: 사물탕(가미가감), 소청룡탕가감)
-   - cheops: 첩수 (숫자, 예: 15)
+  // 1. 연속된 공백/줄바꿈 정리
+  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
 
-2. 환자 정보:
-   - patientName: 환자 이름
-   - chartNumber: 차트번호 (예: 003379)
-   - gender: 성별 ("남" 또는 "여", 없으면 빈 문자열)
-   - age: 나이 (숫자, 예: 67)
-   - birthDate: 생년월일 YYYY-MM-DD 형식 (예: 1958-07-20)
+  // 2. 특수문자 제거 (한글, 숫자, 기본 구두점만 남김)
+  cleanedText = cleanedText.replace(/[^\u3131-\u318E\uAC00-\uD7A3a-zA-Z0-9\s\.,:\-\/\(\)]/g, '');
 
-3. 처방의/한의원 정보:
-   - doctorName: 처방의 이름 (예: 주치형, 없으면 빈 문자열)
-   - clinicName: 한의원명 (예: 아현재한의원(목동), 없으면 빈 문자열)
+  // 3. 텍스트가 너무 길면 제한
+  const MAX_LENGTH = 4000;  // 처방전은 입고서보다 길 수 있음
 
-4. 약재 목록:
-   - name: 약재명 (한글, 괄호 안 내용 포함, 예: "숙지황(9초)", "백작약(주초)")
-   - amountPerCheop: 첩당 용량 (g 단위, 소수점 가능, 예: 5.6)
+  if (cleanedText.length > MAX_LENGTH) {
+    Logger.log(`⚠️ OCR 텍스트가 ${cleanedText.length}자로 너무 깁니다. ${MAX_LENGTH}자로 제한합니다.`);
+    cleanedText = cleanedText.substring(0, MAX_LENGTH);
+  }
 
-** 응답 형식 **
+  Logger.log(`📊 정리된 OCR 텍스트 길이: ${cleanedText.length}자`);
+
+  const prompt = `한의원 처방전 OCR 텍스트를 JSON으로 변환하세요.
+
+아래 JSON 형식으로만 응답 (설명 없이 JSON만):
 {
   "prescriptionNumber": "19357",
   "prescriptionDate": "2025-10-20",
-  "prescriptionName": "사물탕(가미가감)",
+  "prescriptionName": "사물탕가미",
   "cheops": 15,
   "patientName": "김경희",
   "chartNumber": "003379",
@@ -930,30 +927,17 @@ function parsePrescriptionWithGemini(ocrText) {
   "age": 67,
   "birthDate": "1958-07-20",
   "doctorName": "주치형",
-  "clinicName": "아현재한의원(목동)",
+  "clinicName": "아현재한의원",
   "herbs": [
-    {
-      "name": "숙지황(9초)",
-      "amountPerCheop": 5.6
-    },
-    {
-      "name": "백작약(주초)",
-      "amountPerCheop": 5.6
-    }
+    {"name": "숙지황", "amountPerCheop": 5.6},
+    {"name": "백작약", "amountPerCheop": 5.6}
   ]
 }
 
-** 추출 지침 **
-- 처방전 번호는 #. 뒤의 숫자만 추출하세요
-- 날짜 형식을 YYYY-MM-DD로 통일하세요
-- 약재명은 괄호 안의 내용도 포함하세요 (예: 숙지황(9초))
-- "용량" 컬럼의 값이 첩당 용량입니다
-- 모든 약재를 빠짐없이 추출하세요 (보통 10-20개)
-- 정보가 없으면 빈 문자열("")이나 null을 사용하세요
-- 반드시 완전한 JSON을 출력하고 끝에 ] } 를 닫아주세요
+정보 없으면 "", null 사용. 완전한 JSON 출력, 끝에 ] } 닫기
 
 OCR 텍스트:
-${ocrText}`;
+${cleanedText}`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   
@@ -1003,28 +987,70 @@ ${ocrText}`;
     }
     
     const candidate = result.candidates[0];
-    
+
+    // ✅ finishReason 확인 - MAX_TOKENS 처리 (입고서와 동일)
+    const finishReason = candidate.finishReason || 'UNKNOWN';
+    Logger.log(`📌 종료 이유: ${finishReason}`);
+
+    if (finishReason === 'MAX_TOKENS') {
+      Logger.log('⚠️ 토큰 제한으로 응답이 잘렸습니다.');
+
+      if (!candidate.content || !candidate.content.parts || !candidate.content.parts[0] || !candidate.content.parts[0].text) {
+        Logger.log('❌ MAX_TOKENS이지만 응답 내용이 없습니다.');
+        throw new Error('Gemini 토큰 제한 초과: OCR 텍스트가 너무 복잡합니다. 이미지를 더 깔끔하게 찍어주세요.');
+      }
+
+      Logger.log('⚠️ 응답이 잘렸지만 일부 내용이 있습니다. 복구 시도...');
+    }
+
     if (!candidate.content || !candidate.content.parts || !candidate.content.parts[0]) {
+      Logger.log('❌ 응답 구조: ' + JSON.stringify(candidate));
       throw new Error('Gemini API 응답 구조가 올바르지 않습니다.');
     }
-    
+
     let textContent = candidate.content.parts[0].text;
     Logger.log('추출된 텍스트 (첫 800자): ' + textContent.substring(0, 800));
-    
+
     textContent = textContent.trim();
     textContent = textContent.replace(/```json\s*/gi, '');
     textContent = textContent.replace(/```\s*/g, '');
     textContent = textContent.trim();
-    
+
     const jsonStart = textContent.indexOf('{');
     const jsonEnd = textContent.lastIndexOf('}');
-    
-    if (jsonStart === -1 || jsonEnd === -1) {
+
+    if (jsonStart === -1) {
       Logger.log('❌ JSON 찾기 실패. 전체 텍스트: ' + textContent);
       throw new Error('응답에서 JSON 형식을 찾을 수 없습니다.');
     }
-    
-    const jsonText = textContent.substring(jsonStart, jsonEnd + 1);
+
+    let jsonText;
+
+    // ✅ JSON 복구 로직 (입고서와 유사)
+    if (jsonEnd === -1 || jsonEnd < jsonStart) {
+      Logger.log('⚠️ JSON이 불완전합니다. 자동 복구 시도...');
+
+      jsonText = textContent.substring(jsonStart);
+
+      // herbs 배열이 닫히지 않은 경우 처리
+      const lastComma = jsonText.lastIndexOf(',');
+      const lastCloseBrace = jsonText.lastIndexOf('}');
+
+      if (lastCloseBrace !== -1 && lastComma > lastCloseBrace) {
+        jsonText = jsonText.substring(0, lastCloseBrace + 1);
+      }
+
+      if (jsonText.includes('"herbs"') && jsonText.lastIndexOf(']') < jsonText.lastIndexOf('[')) {
+        jsonText += '\n  ]\n}';
+      } else if (!jsonText.endsWith('}')) {
+        jsonText += '\n}';
+      }
+
+      Logger.log('✅ 복구된 JSON (처음 500자): ' + jsonText.substring(0, 500));
+    } else {
+      jsonText = textContent.substring(jsonStart, jsonEnd + 1);
+    }
+
     Logger.log('추출된 JSON (길이: ' + jsonText.length + ')');
     
     try {
