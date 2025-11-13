@@ -215,28 +215,15 @@ function parseIncomingDraftWithGemini(ocrText, fileName) {
     throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
   }
   
-  const prompt = `다음은 한의원 약재 입고서의 OCR 텍스트입니다.
-이 입고서에서 약재 정보를 추출해주세요.
+  const prompt = `한의원 약재 입고서 OCR 텍스트를 분석하여 JSON으로 변환하세요.
 
-** 중요: 반드시 유효한 JSON 형식으로만 응답하세요. 절대 중간에 끊지 마세요. **
-
-** 추출할 정보 **
-1. 입고일: 입고서 상단의 날짜를 YYYY-MM-DD 형식으로
-2. 공급처: 업체명
-3. 약재 목록:
-   - 약재명: 한글 약재 이름
-   - 봉지단위: 500 또는 600 (g)
-   - 수량: 봉지 수
-   - 단가: 개당 가격
-   - 총금액: 총 금액
-
-** 응답 형식 **
+아래 JSON 형식으로만 응답하세요 (설명 없이 JSON만):
 {
-  "incomingDate": "2025-10-25",
-  "supplier": "한약재상",
+  "incomingDate": "YYYY-MM-DD",
+  "supplier": "공급처명",
   "items": [
     {
-      "herbName": "황기",
+      "herbName": "약재명",
       "bagSize": 600,
       "quantity": 2,
       "unitPrice": 11000,
@@ -246,8 +233,8 @@ function parseIncomingDraftWithGemini(ocrText, fileName) {
   ]
 }
 
-confidence는 "high", "medium", "low" 중 하나로 판단해주세요.
-반드시 완전한 JSON을 출력하고 끝에 ] } 를 닫아주세요.
+confidence: high/medium/low 중 선택
+반드시 완전한 JSON 출력, 끝에 ] } 닫기
 
 OCR 텍스트:
 ${ocrText}`;
@@ -263,7 +250,7 @@ ${ocrText}`;
     }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 4096,  // ✅ 2048 → 4096으로 증가
+      maxOutputTokens: 8192,  // ✅ 토큰 제한 증가 (4096 → 8192)
       topP: 0.8,
       topK: 40
     }
@@ -335,32 +322,37 @@ ${ocrText}`;
     
     let jsonText;
     
-    // ✅ JSON 복구 로직
+    // ✅ JSON 복구 로직 (개선)
     if (jsonEnd === -1 || jsonEnd < jsonStart) {
       Logger.log('⚠️ JSON이 불완전합니다. 자동 복구 시도...');
-      
-      // 시작은 있지만 끝이 없는 경우
+
       jsonText = textContent.substring(jsonStart);
-      
-      // items 배열이 닫히지 않은 경우 처리
-      if (!jsonText.includes(']')) {
-        // 마지막 객체가 완전한지 확인
-        const lastObjectMatch = jsonText.lastIndexOf('}');
-        if (lastObjectMatch !== -1) {
-          jsonText = jsonText.substring(0, lastObjectMatch + 1);
-          // items 배열 닫기
-          if (jsonText.includes('"items"')) {
-            jsonText += '\n  ]\n}';
-          } else {
-            jsonText += '\n}';
-          }
-        }
+
+      // 1. 불완전한 필드 제거 (마지막 쉼표 이후)
+      const lastComma = jsonText.lastIndexOf(',');
+      const lastCloseBrace = jsonText.lastIndexOf('}');
+      const lastCloseBracket = jsonText.lastIndexOf(']');
+
+      // 마지막 완전한 객체까지만 사용
+      if (lastCloseBrace !== -1 && lastComma > lastCloseBrace) {
+        // 마지막 완전한 객체 이후 불완전한 부분 제거
+        jsonText = jsonText.substring(0, lastCloseBrace + 1);
+      }
+
+      // 2. items 배열 닫기
+      if (jsonText.includes('"items"') && !jsonText.includes('items":[')) {
+        // items가 시작조차 안된 경우
+        jsonText += ', "items": []}';
+      } else if (jsonText.includes('"items"') && jsonText.lastIndexOf(']') < jsonText.lastIndexOf('[')) {
+        // items 배열이 열렸지만 닫히지 않은 경우
+        jsonText += '\n  ]\n}';
       } else if (!jsonText.endsWith('}')) {
-        // 배열은 있지만 객체가 닫히지 않은 경우
+        // 최종 객체가 닫히지 않은 경우
         jsonText += '\n}';
       }
-      
-      Logger.log('✅ 복구된 JSON: ' + jsonText);
+
+      Logger.log('✅ 복구된 JSON (처음 500자): ' + jsonText.substring(0, 500));
+      Logger.log('✅ 복구된 JSON (마지막 200자): ' + jsonText.substring(Math.max(0, jsonText.length - 200)));
     } else {
       jsonText = textContent.substring(jsonStart, jsonEnd + 1);
     }
