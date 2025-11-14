@@ -1957,31 +1957,22 @@ function updateCurrentStock() {
       continue;
     }
     
-    // 총 입고량 및 공급처 수집
-    let totalIncoming = 0;
+    // 현재 재고 = 약재입고 시트의 잔량(F열) 합계
+    // F열은 이미 출고를 반영한 실제 남은 재고량이므로 출고량을 별도로 빼지 않음
+    let currentStock = 0;
     let suppliers = new Set();
-    
+
     for (let j = 1; j < incomingData.length; j++) {
       if (incomingData[j][2] === herbName) {  // C열: 약재명
-        totalIncoming += parseFloat(incomingData[j][3]) || 0;  // D열: 수량
-        
+        const remainingAmount = parseFloat(incomingData[j][5]) || 0;  // F열: 잔량
+        currentStock += remainingAmount;
+
         const supplier = incomingData[j][7];  // H열: 공급처
         if (supplier && supplier.trim() !== '') {
           suppliers.add(supplier.trim());
         }
       }
     }
-    
-    // 총 출고량
-    let totalDispensed = 0;
-    for (let k = 1; k < dispenseData.length; k++) {
-      if (dispenseData[k][2] === herbName) {  // C열: 약재명
-        totalDispensed += parseFloat(dispenseData[k][3]) || 0;  // D열: 출고량
-      }
-    }
-    
-    // 현재 재고 = 입고 - 출고
-    const currentStock = totalIncoming - totalDispensed;
     
     // C열: 현재재고 업데이트
     masterSheet.getRange(i + 1, 3).setValue(currentStock);
@@ -2000,7 +1991,7 @@ function updateCurrentStock() {
       masterSheet.getRange(i + 1, 8).setValue(supplierList);
     }
 
-    Logger.log(`${herbName}: 입고 ${totalIncoming}g - 출고 ${totalDispensed}g = 재고 ${currentStock}g`);
+    Logger.log(`${herbName}: 현재 재고 ${currentStock}g (약재입고 시트 잔량 합계)`);
 
     // 💰 재고 부족 체크 및 알림
     try {
@@ -3925,28 +3916,19 @@ function updateSingleHerbStock(herbName) {
     return;
   }
   
-  // 총 입고량 계산
+  // 현재 재고 = 약재입고 시트의 잔량(F열) 합계
+  // F열은 이미 출고를 반영한 실제 남은 재고량이므로 출고량을 별도로 빼지 않음
   const incomingData = incomingSheet.getDataRange().getValues();
-  let totalIncoming = 0;
-  
+  let currentStock = 0;
+
   for (let i = 1; i < incomingData.length; i++) {
     if (incomingData[i][2] === herbName) { // C열: 약재명
-      totalIncoming += parseFloat(incomingData[i][3]) || 0; // D열: 입고량
+      const remainingAmount = parseFloat(incomingData[i][5]) || 0; // F열: 잔량
+      currentStock += remainingAmount;
     }
   }
-  
-  // 총 출고량 계산
-  const dispenseData = dispenseSheet.getDataRange().getValues();
-  let totalDispensed = 0;
-  
-  for (let i = 1; i < dispenseData.length; i++) {
-    if (dispenseData[i][2] === herbName) { // C열: 약재명
-      totalDispensed += parseFloat(dispenseData[i][3]) || 0; // D열: 출고량
-    }
-  }
-  
-  // 현재 재고 = 입고 - 출고
-  const currentStock = Math.round((totalIncoming - totalDispensed) * 10) / 10;
+
+  currentStock = Math.round(currentStock * 10) / 10;
 
   // 약재마스터 C열 업데이트
   masterSheet.getRange(masterRow, 3).setValue(currentStock);
