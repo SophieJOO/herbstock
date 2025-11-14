@@ -1948,8 +1948,8 @@ function updateCurrentStock() {
     Logger.log('⚠️ 약재출고 시트가 없습니다.');
   }
   
-  Logger.log('=== 재고 업데이트 시작 ===');
-  
+  Logger.log('=== 재고 업데이트 시작 (✅ 잔량 기준 계산 - 버전 eb14291) ===');
+
   for (let i = 1; i < masterData.length; i++) {
     const herbName = masterData[i][0];
     
