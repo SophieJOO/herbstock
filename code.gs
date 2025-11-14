@@ -1999,10 +1999,23 @@ function updateCurrentStock() {
       const supplierList = Array.from(suppliers).join(', ');
       masterSheet.getRange(i + 1, 8).setValue(supplierList);
     }
-    
+
     Logger.log(`${herbName}: 입고 ${totalIncoming}g - 출고 ${totalDispensed}g = 재고 ${currentStock}g`);
+
+    // 💰 재고 부족 체크 및 알림
+    try {
+      const minimumStock = masterData[i][3]; // D열: 최소재고량
+
+      if (minimumStock && minimumStock > 0 && currentStock < minimumStock) {
+        const shortageAmount = minimumStock - currentStock;
+        Logger.log(`🚨 재고 부족: ${herbName} (현재: ${currentStock}g, 최소: ${minimumStock}g, 부족: ${shortageAmount}g)`);
+        sendLowStockAlert(herbName, shortageAmount);
+      }
+    } catch (e) {
+      Logger.log(`⚠️ ${herbName} 재고 부족 체크 실패: ${e.message}`);
+    }
   }
-  
+
   Logger.log('✅ 약재마스터 현재 재고 업데이트 완료');
 }
 
@@ -2100,45 +2113,270 @@ function calculateAverageDailyUsage(herbName, days = 120) {
 }
 
 /**
+ * 약재 출고 히스토리 수집 (AI 분석용)
+ */
+function getUsageHistory(herbName, days = 120) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dispenseSheet = ss.getSheetByName('약재출고');
+
+  if (!dispenseSheet) {
+    return [];
+  }
+
+  const data = dispenseSheet.getDataRange().getValues();
+
+  if (data.length <= 1) {
+    return [];
+  }
+
+  const today = new Date();
+  const startDate = new Date(today.getTime() - (days * 24 * 60 * 60 * 1000));
+
+  const history = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const dateValue = data[i][0];  // A열: 출고일
+    const name = data[i][2];  // C열: 약재명
+    const amount = parseFloat(data[i][3]) || 0;  // D열: 출고량
+
+    if (name !== herbName) continue;
+
+    let date;
+    if (dateValue instanceof Date) {
+      date = dateValue;
+    } else {
+      date = new Date(dateValue);
+    }
+
+    if (date >= startDate && date <= today) {
+      history.push({
+        date: Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+        amount: amount
+      });
+    }
+  }
+
+  // 날짜순 정렬
+  history.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  return history;
+}
+
+/**
+ * AI 기반 최적재고량 분석 (Gemini API)
+ */
+function analyzeOptimalStockWithAI(herbName, usageHistory) {
+  // 출고 데이터가 부족하면 기본값 사용
+  if (usageHistory.length < 7) {
+    Logger.log(`⚠️ ${herbName}: 데이터 부족 (${usageHistory.length}건) - 기본 계산 사용`);
+    const avgUsage = calculateAverageDailyUsage(herbName, 120);
+    return {
+      optimalStock: Math.round(avgUsage * 7 * 1.2),
+      avgDailyUsage: avgUsage,
+      confidence: 'low',
+      reason: '데이터 부족으로 기본 계산 사용'
+    };
+  }
+
+  const apiKey = getConfig('GEMINI_API_KEY');
+  if (!apiKey) {
+    Logger.log('⚠️ Gemini API 키가 없습니다 - 기본 계산 사용');
+    const avgUsage = calculateAverageDailyUsage(herbName, 120);
+    return {
+      optimalStock: Math.round(avgUsage * 7 * 1.2),
+      avgDailyUsage: avgUsage,
+      confidence: 'low',
+      reason: 'API 키 없음'
+    };
+  }
+
+  // 주간 사용량 집계 (AI 분석 효율화)
+  const weeklyData = [];
+  let weekStart = null;
+  let weekTotal = 0;
+
+  usageHistory.forEach((record, idx) => {
+    const recordDate = new Date(record.date);
+
+    if (!weekStart) {
+      weekStart = record.date;
+      weekTotal = record.amount;
+    } else {
+      const daysDiff = Math.floor((recordDate - new Date(weekStart)) / (1000 * 60 * 60 * 24));
+
+      if (daysDiff < 7) {
+        weekTotal += record.amount;
+      } else {
+        weeklyData.push({ week: weekStart, total: Math.round(weekTotal) });
+        weekStart = record.date;
+        weekTotal = record.amount;
+      }
+    }
+
+    // 마지막 주 추가
+    if (idx === usageHistory.length - 1 && weekTotal > 0) {
+      weeklyData.push({ week: weekStart, total: Math.round(weekTotal) });
+    }
+  });
+
+  const prompt = `당신은 한의원 약재 재고 관리 전문가입니다.
+
+약재명: ${herbName}
+분석 기간: 최근 ${usageHistory.length}일 (${weeklyData.length}주)
+
+주간 사용량 데이터:
+${weeklyData.map((w, i) => `${i + 1}주차 (${w.week}): ${w.total}g`).join('\n')}
+
+다음을 분석하여 JSON으로 응답하세요:
+1. 평균 일일 소비량 (avgDailyUsage: 숫자)
+2. 계절성 패턴 (seasonality: "높음/중간/낮음")
+3. 증가/감소 트렌드 (trend: "증가/안정/감소")
+4. 최근 변동성 (volatility: "높음/중간/낮음")
+5. 권장 최소재고량 (optimalStock: 숫자, 단위 g)
+   - 리드타임 7일 고려
+   - 안전계수 1.2~1.5배 (변동성에 따라)
+   - 트렌드 반영 (증가 추세면 더 높게)
+6. 신뢰도 (confidence: "high/medium/low")
+7. 분석 근거 (reason: 한줄 설명)
+
+응답 형식 (JSON만):
+{
+  "avgDailyUsage": 숫자,
+  "seasonality": "높음/중간/낮음",
+  "trend": "증가/안정/감소",
+  "volatility": "높음/중간/낮음",
+  "optimalStock": 숫자,
+  "confidence": "high/medium/low",
+  "reason": "분석 근거"
+}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
+
+  const payload = {
+    contents: [{
+      parts: [{
+        text: prompt
+      }]
+    }],
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 1024,
+      responseMimeType: "application/json"
+    }
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    let attempt = 0;
+    const maxRetries = 3;
+
+    while (attempt < maxRetries) {
+      attempt++;
+
+      const response = UrlFetchApp.fetch(url, options);
+      const statusCode = response.getResponseCode();
+
+      if (statusCode === 503) {
+        Logger.log(`⚠️ Gemini API 503 오류 (${attempt}/${maxRetries})`);
+        if (attempt < maxRetries) {
+          const waitTime = attempt * 5;
+          Logger.log(`⏳ ${waitTime}초 대기 중...`);
+          Utilities.sleep(waitTime * 1000);
+          continue;
+        } else {
+          throw new Error('Gemini API 503 오류 (재시도 실패)');
+        }
+      }
+
+      if (statusCode !== 200) {
+        throw new Error(`Gemini API 오류: ${statusCode} - ${response.getContentText()}`);
+      }
+
+      const result = JSON.parse(response.getContentText());
+
+      if (!result.candidates || result.candidates.length === 0) {
+        throw new Error('Gemini API 응답 없음');
+      }
+
+      const textContent = result.candidates[0].content.parts[0].text;
+      const analysis = JSON.parse(textContent);
+
+      Logger.log(`✅ ${herbName} AI 분석 완료: 평균 ${analysis.avgDailyUsage}g/일, 최적재고 ${analysis.optimalStock}g`);
+      Logger.log(`   트렌드: ${analysis.trend}, 변동성: ${analysis.volatility}, 신뢰도: ${analysis.confidence}`);
+      Logger.log(`   이유: ${analysis.reason}`);
+
+      return analysis;
+
+    }
+
+    // 모든 재시도 실패
+    throw new Error('Gemini API 재시도 모두 실패');
+
+  } catch (error) {
+    Logger.log(`❌ ${herbName} AI 분석 실패: ${error.message} - 기본 계산 사용`);
+    const avgUsage = calculateAverageDailyUsage(herbName, 120);
+    return {
+      optimalStock: Math.round(avgUsage * 7 * 1.2),
+      avgDailyUsage: avgUsage,
+      confidence: 'low',
+      reason: `AI 분석 실패: ${error.message}`
+    };
+  }
+}
+
+/**
  * 최소재고량 AI 자동 계산 (120일 기준)
  */
 function autoUpdateMinimumStock() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const masterSheet = ss.getSheetByName('약재마스터');
-  
+
   if (!masterSheet) {
     Logger.log('❌ 약재마스터 시트가 없습니다.');
     return;
   }
-  
+
   const data = masterSheet.getDataRange().getValues();
-  
-  Logger.log('=== 최소재고량 자동 업데이트 시작 ===');
-  
+
+  Logger.log('=== AI 기반 최소재고량 자동 업데이트 시작 ===');
+
   for (let i = 1; i < data.length; i++) {
     const herbName = data[i][0];
-    
+
     if (!herbName || herbName.trim() === '') {
       continue;
     }
-    
-    // 평균 일일 소비량 계산
-    const avgDailyUsage = calculateAverageDailyUsage(herbName, 120);
-    
+
+    // 출고 히스토리 수집
+    const usageHistory = getUsageHistory(herbName, 120);
+
+    // AI 분석
+    const analysis = analyzeOptimalStockWithAI(herbName, usageHistory);
+
     // F열에 평균일일소비량 업데이트
-    masterSheet.getRange(i + 1, 6).setValue(Math.round(avgDailyUsage * 10) / 10);
-    
-    // 안전재고 계산 (리드타임 7일 + 안전계수 1.2배)
-    const safetyStock = avgDailyUsage * 7 * 1.2;
-    const minimumStock = Math.round(safetyStock);
-    
+    masterSheet.getRange(i + 1, 6).setValue(Math.round(analysis.avgDailyUsage * 10) / 10);
+
     // D열에 최소재고량 업데이트
-    masterSheet.getRange(i + 1, 4).setValue(minimumStock);
-    
-    Logger.log(`${herbName}: 평균 ${Math.round(avgDailyUsage)}g/일 → 최소재고 ${minimumStock}g`);
+    masterSheet.getRange(i + 1, 4).setValue(analysis.optimalStock);
+
+    // E열에 분석 결과 메모 (선택사항 - 없으면 무시)
+    try {
+      const memo = `${analysis.trend} / ${analysis.volatility} / ${analysis.confidence}`;
+      masterSheet.getRange(i + 1, 5).setNote(analysis.reason);
+    } catch (e) {
+      // E열이 없거나 권한 문제면 무시
+    }
+
+    Logger.log(`${herbName}: 평균 ${Math.round(analysis.avgDailyUsage)}g/일 → 최적재고 ${analysis.optimalStock}g (${analysis.confidence})`);
   }
-  
-  Logger.log('✅ 최소재고량 자동 업데이트 완료');
+
+  Logger.log('✅ AI 기반 최소재고량 자동 업데이트 완료');
 }
 
 /**
@@ -3709,12 +3947,12 @@ function updateSingleHerbStock(herbName) {
   
   // 현재 재고 = 입고 - 출고
   const currentStock = Math.round((totalIncoming - totalDispensed) * 10) / 10;
-  
+
   // 약재마스터 C열 업데이트
   masterSheet.getRange(masterRow, 3).setValue(currentStock);
-  
+
   Logger.log(`  ✅ 약재마스터 업데이트: ${herbName} → ${currentStock}g`);
-  
+
   // 유통기한도 업데이트
   try {
     const nearestExpiry = getNearestExpiryDate(herbName);
@@ -3723,6 +3961,19 @@ function updateSingleHerbStock(herbName) {
     }
   } catch (e) {
     Logger.log(`  ⚠️ 유통기한 업데이트 실패: ${e.message}`);
+  }
+
+  // 💰 재고 부족 체크 및 알림
+  try {
+    const minimumStock = masterData[masterRow - 1][3]; // D열: 최소재고량
+
+    if (minimumStock && minimumStock > 0 && currentStock < minimumStock) {
+      const shortageAmount = minimumStock - currentStock;
+      Logger.log(`  🚨 재고 부족: ${herbName} (현재: ${currentStock}g, 최소: ${minimumStock}g, 부족: ${shortageAmount}g)`);
+      sendLowStockAlert(herbName, shortageAmount);
+    }
+  } catch (e) {
+    Logger.log(`  ⚠️ 재고 부족 체크 실패: ${e.message}`);
   }
 }
 
