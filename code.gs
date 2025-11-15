@@ -3206,6 +3206,7 @@ function processCheckedNow() {
     Logger.log('=== 체크된 처방 확인 시작 ===\n');
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();  // ✅ ui 변수를 먼저 선언
     const sheet = ss.getSheetByName('처방상세');
 
     if (!sheet) {
@@ -3341,7 +3342,6 @@ function processCheckedNow() {
 
     // ===== 3단계: 사용자 확인 =====
     Logger.log('\n3단계: 사용자 확인');
-    const ui = SpreadsheetApp.getUi();
     let confirmMessage = `처리할 항목: ${checkedItems.length}개\n\n`;
 
     if (allAvailable) {
