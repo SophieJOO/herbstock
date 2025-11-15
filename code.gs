@@ -1156,67 +1156,72 @@ function checkAndNotifyPriceChange(herbName, newPricePerGram, supplier) {
   Logger.log(`   신규: ${newPricePerGram}원/g`);
   Logger.log(`   변동: ${priceChange > 0 ? '+' : ''}${priceChange}원/g (${changePercent}%)`);
 
-  // 5% 이상 변동 시 알림 및 기록
-  const ALERT_THRESHOLD = 5;
-
-  if (Math.abs(parseFloat(changePercent)) >= ALERT_THRESHOLD) {
-    Logger.log(`⚠️ ${ALERT_THRESHOLD}% 이상 변동 감지 - 슬랙 알림 발송`);
-
-    // 슬랙 알림
-    const emoji = priceChange > 0 ? '📈' : '📉';
-    const direction = priceChange > 0 ? '상승' : '하락';
-    const color = priceChange > 0 ? '#ea4335' : '#34a853';
-
-    const message = {
-      text: `${emoji} *단가 변동 알림*`,
-      attachments: [{
-        color: color,
-        fields: [
-          {
-            title: '약재명',
-            value: herbName,
-            short: true
-          },
-          {
-            title: '공급처',
-            value: supplier,
-            short: true
-          },
-          {
-            title: '이전 단가',
-            value: `${previousPrice}원/g`,
-            short: true
-          },
-          {
-            title: '신규 단가',
-            value: `${newPricePerGram}원/g`,
-            short: true
-          },
-          {
-            title: '변동금액',
-            value: `${priceChange > 0 ? '+' : ''}${priceChange}원/g`,
-            short: true
-          },
-          {
-            title: '변동률',
-            value: `${priceChange > 0 ? '+' : ''}${changePercent}% ${direction}`,
-            short: true
-          }
-        ],
-        footer: '가격이력 시트에서 전체 이력 확인 가능',
-        ts: Math.floor(Date.now() / 1000)
-      }]
-    };
-
-    try {
-      sendSlackAlert(JSON.stringify(message));
-      Logger.log(`✅ 슬랙 알림 발송 완료`);
-    } catch (error) {
-      Logger.log(`⚠️ 슬랙 알림 실패: ${error.message}`);
-    }
-
-    // 가격이력 기록
+  // 가격 변동이 있으면 무조건 기록
+  if (priceChange !== 0) {
+    // 가격이력 시트에 기록 (변동이 조금이라도 있으면 무조건 기록)
     recordPriceChange(herbName, previousPrice, newPricePerGram, supplier, parseFloat(changePercent));
+    Logger.log(`✅ 가격이력 기록: ${herbName} ${changePercent}% 변동`);
+
+    // 슬랙 알림은 5% 이상 변동 시에만 발송 (너무 많은 알림 방지)
+    const ALERT_THRESHOLD = 5;
+
+    if (Math.abs(parseFloat(changePercent)) >= ALERT_THRESHOLD) {
+      Logger.log(`⚠️ ${ALERT_THRESHOLD}% 이상 변동 감지 - 슬랙 알림 발송`);
+
+      const emoji = priceChange > 0 ? '📈' : '📉';
+      const direction = priceChange > 0 ? '상승' : '하락';
+      const color = priceChange > 0 ? '#ea4335' : '#34a853';
+
+      const message = {
+        text: `${emoji} *단가 변동 알림*`,
+        attachments: [{
+          color: color,
+          fields: [
+            {
+              title: '약재명',
+              value: herbName,
+              short: true
+            },
+            {
+              title: '공급처',
+              value: supplier,
+              short: true
+            },
+            {
+              title: '이전 단가',
+              value: `${previousPrice}원/g`,
+              short: true
+            },
+            {
+              title: '신규 단가',
+              value: `${newPricePerGram}원/g`,
+              short: true
+            },
+            {
+              title: '변동금액',
+              value: `${priceChange > 0 ? '+' : ''}${priceChange}원/g`,
+              short: true
+            },
+            {
+              title: '변동률',
+              value: `${priceChange > 0 ? '+' : ''}${changePercent}% ${direction}`,
+              short: true
+            }
+          ],
+          footer: '가격이력 시트에서 전체 이력 확인 가능',
+          ts: Math.floor(Date.now() / 1000)
+        }]
+      };
+
+      try {
+        sendSlackAlert(JSON.stringify(message));
+        Logger.log(`✅ 슬랙 알림 발송 완료`);
+      } catch (error) {
+        Logger.log(`⚠️ 슬랙 알림 실패: ${error.message}`);
+      }
+    }
+  } else {
+    Logger.log(`ℹ️ 가격 변동 없음 - 기록 생략`);
   }
 }
 
