@@ -2320,6 +2320,123 @@ function calculateAverageDailyUsage(herbName, days = 120) {
 }
 
 /**
+ * 감모율 분석 (폐기 이력 기반)
+ */
+function analyzeSpoilageRate(herbName, days = 365) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const adjustmentSheet = ss.getSheetByName('재고조정이력');
+  const incomingSheet = ss.getSheetByName('약재입고');
+
+  // 재고조정이력 시트가 없으면 감모 없음으로 처리
+  if (!adjustmentSheet) {
+    return {
+      totalSpoilage: 0,
+      spoilageAmount: 0,
+      spoilageRate: 0,
+      avgSpoilagePerMonth: 0,
+      totalIncoming: 0
+    };
+  }
+
+  const today = new Date();
+  const startDate = new Date(today.getTime() - (days * 24 * 60 * 60 * 1000));
+
+  // 재고조정이력에서 폐기 데이터 수집
+  const adjustmentData = adjustmentSheet.getDataRange().getValues();
+  let totalSpoilage = 0;
+  let spoilageRecords = [];
+
+  for (let i = 1; i < adjustmentData.length; i++) {
+    const adjustmentTime = adjustmentData[i][0];  // A열: 조정일시
+    const adjustHerbName = adjustmentData[i][2];  // C열: 약재명
+    const adjustmentAmount = parseFloat(adjustmentData[i][7]) || 0;  // H열: 조정량
+    const adjustmentType = adjustmentData[i][8];  // I열: 조정 유형
+
+    if (adjustHerbName !== herbName) continue;
+    if (adjustmentType !== '폐기') continue;
+
+    // 날짜 파싱
+    let adjDate;
+    if (adjustmentTime instanceof Date) {
+      adjDate = adjustmentTime;
+    } else {
+      try {
+        adjDate = new Date(adjustmentTime);
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (adjDate >= startDate && adjDate <= today) {
+      // 폐기는 음수로 기록되므로 절대값 사용
+      const spoilageAmount = Math.abs(adjustmentAmount);
+      totalSpoilage += spoilageAmount;
+      spoilageRecords.push({
+        date: adjDate,
+        amount: spoilageAmount
+      });
+    }
+  }
+
+  // 동일 기간 총 입고량 계산
+  if (!incomingSheet) {
+    return {
+      totalSpoilage: totalSpoilage,
+      spoilageAmount: 0,
+      spoilageRate: 0,
+      avgSpoilagePerMonth: totalSpoilage / (days / 30),
+      totalIncoming: 0
+    };
+  }
+
+  const incomingData = incomingSheet.getDataRange().getValues();
+  let totalIncoming = 0;
+  let totalSpoilageValue = 0;
+
+  for (let i = 1; i < incomingData.length; i++) {
+    const incomingDate = incomingData[i][1];  // B열: 입고일
+    const incomingHerbName = incomingData[i][2];  // C열: 약재명
+    const incomingAmount = parseFloat(incomingData[i][3]) || 0;  // D열: 입고량
+    const pricePerGram = parseFloat(incomingData[i][6]) || 0;  // G열: 단가
+
+    if (incomingHerbName !== herbName) continue;
+
+    // 날짜 파싱
+    let incDate;
+    if (incomingDate instanceof Date) {
+      incDate = incomingDate;
+    } else {
+      try {
+        incDate = new Date(incomingDate);
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (incDate >= startDate && incDate <= today) {
+      totalIncoming += incomingAmount;
+
+      // 폐기 금액 계산 (평균 단가 사용)
+      totalSpoilageValue += totalSpoilage * pricePerGram;
+    }
+  }
+
+  // 감모율 계산 (%)
+  const spoilageRate = totalIncoming > 0 ? (totalSpoilage / totalIncoming) * 100 : 0;
+
+  // 월평균 폐기량
+  const avgSpoilagePerMonth = totalSpoilage / (days / 30);
+
+  return {
+    totalSpoilage: Math.round(totalSpoilage * 10) / 10,
+    spoilageAmount: Math.round(totalSpoilageValue),
+    spoilageRate: Math.round(spoilageRate * 100) / 100,
+    avgSpoilagePerMonth: Math.round(avgSpoilagePerMonth * 10) / 10,
+    totalIncoming: Math.round(totalIncoming * 10) / 10
+  };
+}
+
+/**
  * 약재 출고 히스토리 수집 (AI 분석용)
  */
 function getUsageHistory(herbName, days = 120) {
@@ -2370,7 +2487,7 @@ function getUsageHistory(herbName, days = 120) {
 }
 
 /**
- * AI 기반 최적재고량 분석 (Gemini API)
+ * AI 기반 최적재고량 분석 (Gemini API + 감모율 반영)
  */
 function analyzeOptimalStockWithAI(herbName, usageHistory) {
   // 출고 데이터가 부족하면 기본값 사용
@@ -2381,7 +2498,8 @@ function analyzeOptimalStockWithAI(herbName, usageHistory) {
       optimalStock: Math.round(avgUsage * 7 * 1.2),
       avgDailyUsage: avgUsage,
       confidence: 'low',
-      reason: '데이터 부족으로 기본 계산 사용'
+      reason: '데이터 부족으로 기본 계산 사용',
+      spoilageRate: 0
     };
   }
 
@@ -2393,9 +2511,13 @@ function analyzeOptimalStockWithAI(herbName, usageHistory) {
       optimalStock: Math.round(avgUsage * 7 * 1.2),
       avgDailyUsage: avgUsage,
       confidence: 'low',
-      reason: 'API 키 없음'
+      reason: 'API 키 없음',
+      spoilageRate: 0
     };
   }
+
+  // 감모율 분석 (연간)
+  const spoilageAnalysis = analyzeSpoilageRate(herbName, 365);
 
   // 주간 사용량 집계 (AI 분석 효율화)
   const weeklyData = [];
@@ -2434,6 +2556,12 @@ function analyzeOptimalStockWithAI(herbName, usageHistory) {
 주간 사용량 데이터:
 ${weeklyData.map((w, i) => `${i + 1}주차 (${w.week}): ${w.total}g`).join('\n')}
 
+📊 감모율 분석 (최근 1년):
+- 감모율: ${spoilageAnalysis.spoilageRate}%
+- 총 폐기량: ${spoilageAnalysis.totalSpoilage}g
+- 폐기 금액: ${spoilageAnalysis.spoilageAmount.toLocaleString()}원
+- 월평균 폐기: ${spoilageAnalysis.avgSpoilagePerMonth}g
+
 다음을 분석하여 JSON으로 응답하세요:
 1. 평균 일일 소비량 (avgDailyUsage: 숫자)
 2. 계절성 패턴 (seasonality: "높음/중간/낮음")
@@ -2441,10 +2569,14 @@ ${weeklyData.map((w, i) => `${i + 1}주차 (${w.week}): ${w.total}g`).join('\n')
 4. 최근 변동성 (volatility: "높음/중간/낮음")
 5. 권장 최소재고량 (optimalStock: 숫자, 단위 g)
    - 리드타임 7일 고려
-   - 안전계수 1.2~1.5배 (변동성에 따라)
+   - 변동성에 따른 안전계수 (낮음: 1.2배, 중간: 1.3배, 높음: 1.5배)
    - 트렌드 반영 (증가 추세면 더 높게)
+   - 🔥 감모율 반영 (매우 중요):
+     * 감모율 10% 이상: 소량 주문 권장 (안전계수 1.1배로 낮춤)
+     * 감모율 3-10%: 정상 운영 (기본 안전계수)
+     * 감모율 3% 미만: 대량 주문 가능 (안전계수 1.5배로 높임)
 6. 신뢰도 (confidence: "high/medium/low")
-7. 분석 근거 (reason: 한줄 설명)
+7. 분석 근거 (reason: 한줄 설명, 감모율 언급 필수)
 
 응답 형식 (JSON만):
 {
@@ -2454,7 +2586,7 @@ ${weeklyData.map((w, i) => `${i + 1}주차 (${w.week}): ${w.total}g`).join('\n')
   "volatility": "높음/중간/낮음",
   "optimalStock": 숫자,
   "confidence": "high/medium/low",
-  "reason": "분석 근거"
+  "reason": "분석 근거 (감모율 ${spoilageAnalysis.spoilageRate}% 반영)"
 }`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
@@ -2514,9 +2646,13 @@ ${weeklyData.map((w, i) => `${i + 1}주차 (${w.week}): ${w.total}g`).join('\n')
       const textContent = result.candidates[0].content.parts[0].text;
       const analysis = JSON.parse(textContent);
 
+      // 감모율 정보 추가
+      analysis.spoilageRate = spoilageAnalysis.spoilageRate;
+      analysis.spoilageAmount = spoilageAnalysis.spoilageAmount;
+
       Logger.log(`✅ ${herbName} AI 분석 완료: 평균 ${analysis.avgDailyUsage}g/일, 최적재고 ${analysis.optimalStock}g`);
-      Logger.log(`   트렌드: ${analysis.trend}, 변동성: ${analysis.volatility}, 신뢰도: ${analysis.confidence}`);
-      Logger.log(`   이유: ${analysis.reason}`);
+      Logger.log(`   트렌드: ${analysis.trend}, 변동성: ${analysis.volatility}, 감모율: ${analysis.spoilageRate}%`);
+      Logger.log(`   신뢰도: ${analysis.confidence}, 이유: ${analysis.reason}`);
 
       return analysis;
 
@@ -2572,6 +2708,9 @@ function autoUpdateMinimumStock() {
     // D열에 최소재고량 업데이트
     masterSheet.getRange(i + 1, 4).setValue(analysis.optimalStock);
 
+    // I열에 감모율 업데이트 (%)
+    masterSheet.getRange(i + 1, 9).setValue(analysis.spoilageRate);
+
     // E열에 분석 결과 메모 (선택사항 - 없으면 무시)
     try {
       const memo = `${analysis.trend} / ${analysis.volatility} / ${analysis.confidence}`;
@@ -2580,7 +2719,7 @@ function autoUpdateMinimumStock() {
       // E열이 없거나 권한 문제면 무시
     }
 
-    Logger.log(`${herbName}: 평균 ${Math.round(analysis.avgDailyUsage)}g/일 → 최적재고 ${analysis.optimalStock}g (${analysis.confidence})`);
+    Logger.log(`${herbName}: 평균 ${Math.round(analysis.avgDailyUsage)}g/일 → 최적재고 ${analysis.optimalStock}g (감모율 ${analysis.spoilageRate}%, ${analysis.confidence})`);
   }
 
   Logger.log('✅ AI 기반 최소재고량 자동 업데이트 완료');
