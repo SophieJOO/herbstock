@@ -605,6 +605,62 @@ function onTempIncomingEdit(e) {
 }
 
 /**
+ * 약재입고 시트 F열(잔량) 편집 트리거: 해당 약재 재고 즉시 업데이트
+ */
+function onIncomingStockEdit(e) {
+  try {
+    if (!e || !e.source) {
+      Logger.log('❌ 이 함수는 수동 실행할 수 없습니다.');
+      return;
+    }
+
+    const sheet = e.source.getActiveSheet();
+    const range = e.range;
+
+    // 약재입고 시트가 아니면 무시
+    if (sheet.getName() !== '약재입고') return;
+
+    // F열(6열, 잔량)이 아니면 무시
+    if (range.getColumn() !== 6) return;
+
+    const row = range.getRow();
+    if (row === 1) return;  // 헤더 제외
+
+    // 편집된 행의 약재명 추출 (C열)
+    const herbName = sheet.getRange(row, 3).getValue();
+
+    if (!herbName || herbName.trim() === '') {
+      Logger.log('⚠️ 약재명이 없습니다.');
+      return;
+    }
+
+    Logger.log(`🔄 잔량 수정 감지: ${herbName} (${row}행) - 약재마스터 업데이트 시작`);
+
+    // 해당 약재만 업데이트
+    updateSingleHerbStock(herbName);
+
+    Logger.log(`✅ ${herbName} 약재마스터 업데이트 완료`);
+
+  } catch (error) {
+    Logger.log(`⚠️ 약재입고 편집 트리거 오류: ${error.message}`);
+  }
+}
+
+/**
+ * 통합 편집 트리거 (모든 시트 편집 감지)
+ */
+function onEdit(e) {
+  // 임시입고 시트 처리완료 체크
+  onTempIncomingEdit(e);
+
+  // 처방상세 시트 조제완료 체크
+  onPrescriptionEdit(e);
+
+  // 약재입고 시트 잔량 수정
+  onIncomingStockEdit(e);
+}
+
+/**
  * 임시입고 → 약재입고 (봉지별 분리 + 잔량 관리)
  */
 /**
@@ -2611,20 +2667,13 @@ function setupAllTriggers() {
     .create();
   Logger.log('✅ autoUpdateMinimumStock 트리거 생성');
   
-  // 6. 임시입고 편집 트리거
-  ScriptApp.newTrigger('onTempIncomingEdit')
+  // 6. 통합 편집 트리거 (임시입고, 처방상세, 약재입고)
+  ScriptApp.newTrigger('onEdit')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
-  Logger.log('✅ onTempIncomingEdit 트리거 생성');
-  
-  // 7. 처방상세 편집 트리거 ⭐ 중요!
-  ScriptApp.newTrigger('onPrescriptionEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-  Logger.log('✅ onPrescriptionEdit 트리거 생성');
-  
+  Logger.log('✅ 통합 onEdit 트리거 생성 (임시입고/처방상세/약재입고)');
+
   Logger.log('\n✅✅✅ 모든 트리거 설정 완료!');
   Browser.msgBox('완료', '모든 트리거가 설정되었습니다!', Browser.Buttons.OK);
 }
