@@ -3254,22 +3254,78 @@ function processCheckedNow() {
       Browser.msgBox('알림', '체크된 항목이 없습니다.', Browser.Buttons.OK);
       return;
     }
-  
-    // ===== 2단계: 재고 확인 =====
-    Logger.log('\n2단계: 재고 확인 시작');
+
+    // ===== 배치 크기 제한 (성능 최적화) =====
+    const MAX_BATCH_SIZE = 50;
+    if (checkedItems.length > MAX_BATCH_SIZE) {
+      const response = ui.alert(
+        '항목 수 초과',
+        `체크된 항목이 ${checkedItems.length}개입니다.\n\n` +
+        `한 번에 최대 ${MAX_BATCH_SIZE}개까지만 처리할 수 있습니다.\n` +
+        `(성능 및 타임아웃 방지)\n\n` +
+        `상위 ${MAX_BATCH_SIZE}개만 처리하시겠습니까?\n` +
+        `나머지는 다음 번에 처리하세요.`,
+        ui.ButtonSet.YES_NO
+      );
+
+      if (response !== ui.Button.YES) {
+        Logger.log('사용자가 배치 크기 초과로 취소했습니다.');
+        Browser.msgBox(
+          '안내',
+          `체크를 ${MAX_BATCH_SIZE}개 이하로 줄인 후 다시 실행하세요.\n\n` +
+          `💡 팁: 처방전 번호별로 나눠서 처리하면 더 안전합니다.`,
+          Browser.Buttons.OK
+        );
+        return;
+      }
+
+      // 상위 MAX_BATCH_SIZE개만 처리
+      checkedItems = checkedItems.slice(0, MAX_BATCH_SIZE);
+      Logger.log(`배치 크기 제한: ${MAX_BATCH_SIZE}개만 처리`);
+    }
+
+    // ===== 2단계: 재고 확인 (최적화 버전) =====
+    Logger.log('\n2단계: 재고 확인 시작 (최적화)');
+
+    // ✅ 약재입고 데이터를 한 번만 읽어서 재사용 (성능 최적화)
+    const incomingSheet = ss.getSheetByName('약재입고');
+    if (!incomingSheet) {
+      throw new Error('약재입고 시트를 찾을 수 없습니다.');
+    }
+
+    const incomingData = incomingSheet.getDataRange().getValues();
+    Logger.log(`약재입고 데이터 로드 완료: ${incomingData.length}행`);
+
+    // 약재별 재고를 미리 계산 (캐싱)
+    const stockCache = {};
+    for (let i = 1; i < incomingData.length; i++) {
+      const herbName = incomingData[i][2];  // C열: 약재명
+      const remaining = parseFloat(incomingData[i][5]) || 0;  // F열: 잔량
+
+      if (!stockCache[herbName]) {
+        stockCache[herbName] = 0;
+      }
+      stockCache[herbName] += remaining;
+    }
+    Logger.log(`약재별 재고 캐시 생성 완료: ${Object.keys(stockCache).length}종`);
+
     let stockCheckResults = [];
     let allAvailable = true;
 
     for (let item of checkedItems) {
       try {
-        // 재고만 확인 (차감하지 않음)
-        const stockCheck = checkStockAvailability(item.herbName, item.amount);
+        const totalAvailable = stockCache[item.herbName] || 0;
+
+        if (totalAvailable < item.amount) {
+          throw new Error(`재고 부족 (필요: ${item.amount}g, 가용: ${totalAvailable}g)`);
+        }
+
         stockCheckResults.push({
           item: item,
           available: true,
-          message: `✅ ${item.herbName} ${item.amount}g (재고: ${stockCheck.totalAvailable}g)`
+          message: `✅ ${item.herbName} ${item.amount}g (재고: ${totalAvailable}g)`
         });
-        Logger.log(`  ✅ ${item.herbName}: 재고 충분 (${stockCheck.totalAvailable}g)`);
+        Logger.log(`  ✅ ${item.herbName}: 재고 충분 (${totalAvailable}g)`);
       } catch (error) {
         allAvailable = false;
         stockCheckResults.push({
