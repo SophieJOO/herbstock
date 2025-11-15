@@ -4051,7 +4051,11 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('🔧 관리')
       .addItem('⚙️ 모든 트리거 설정', 'setupAllTriggers')
-      .addItem('📋 시스템 테스트', 'testSystem'))
+      .addItem('📋 시스템 테스트', 'testSystem')
+      .addSeparator()
+      .addItem('🔍 트리거 상태 확인', 'checkTriggerStatus')
+      .addItem('🧪 조제 처리 테스트', 'testPrescriptionProcessing')
+      .addItem('🔍 처방상세 시트 구조 확인', 'checkPrescriptionSheetStructure'))
     .addSeparator()
     .addItem('💰 전체 처방 원가 업데이트', 'updateAllPrescriptionCosts')
     .addSeparator()
@@ -4405,4 +4409,188 @@ function setupOnOpenTrigger() {
     .create();
   
   Browser.msgBox('완료', 'onOpen 트리거가 재생성되었습니다. 새로고침하세요!', Browser.Buttons.OK);
+}
+
+// ========================================
+// 🔍 진단 및 테스트 함수
+// ========================================
+
+/**
+ * 처방상세 시트 구조 확인
+ */
+function checkPrescriptionSheetStructure() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('처방상세');
+
+  if (!sheet) {
+    Browser.msgBox('오류', '처방상세 시트가 없습니다.', Browser.Buttons.OK);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const dataRowCount = sheet.getLastRow() - 1;
+
+  let message = '처방상세 시트 구조:\n\n';
+  headers.forEach((header, index) => {
+    message += `${index + 1}열: ${header}\n`;
+  });
+
+  message += `\n총 ${dataRowCount}개의 조제 대기 항목`;
+
+  if (headers[9] === '조제완료') {
+    message += '\n\n✅ 조제완료 컬럼 위치: 10열 (정상)';
+  } else {
+    message += `\n\n⚠️ 10열이 "조제완료"가 아닙니다: "${headers[9]}"`;
+  }
+
+  Browser.msgBox('처방상세 시트 구조', message, Browser.Buttons.OK);
+}
+
+/**
+ * 약재입고 시트 구조 확인
+ */
+function checkIncomingSheetStructure() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('약재입고');
+
+  if (!sheet) {
+    Browser.msgBox('오류', '약재입고 시트가 없습니다.', Browser.Buttons.OK);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const dataRowCount = sheet.getLastRow() - 1;
+
+  let message = '약재입고 시트 구조:\n\n';
+  headers.forEach((header, index) => {
+    message += `${index + 1}열: ${header}\n`;
+  });
+
+  message += `\n총 ${dataRowCount}개의 입고 기록`;
+
+  Browser.msgBox('약재입고 시트 구조', message, Browser.Buttons.OK);
+}
+
+/**
+ * 약재출고 시트 구조 확인
+ */
+function checkDispenseSheetStructure() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('약재출고');
+
+  if (!sheet) {
+    Browser.msgBox('안내', '약재출고 시트가 아직 생성되지 않았습니다.\n\n첫 조제 처리 시 자동으로 생성됩니다.', Browser.Buttons.OK);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const dataRowCount = sheet.getLastRow() - 1;
+
+  let message = '약재출고 시트 구조:\n\n';
+  headers.forEach((header, index) => {
+    message += `${index + 1}열: ${header}\n`;
+  });
+
+  message += `\n총 ${dataRowCount}개의 출고 기록`;
+
+  Browser.msgBox('약재출고 시트 구조', message, Browser.Buttons.OK);
+}
+
+/**
+ * 트리거 상태 확인
+ */
+function checkTriggerStatus() {
+  const triggers = ScriptApp.getProjectTriggers();
+
+  let message = '📊 현재 설정된 트리거:\n\n';
+
+  if (triggers.length === 0) {
+    message += '⚠️ 설정된 트리거가 없습니다!\n\n';
+    message += '메뉴: 🏥 약재관리 > 🔧 관리 > ⚙️ 모든 트리거 설정\n을 실행하세요.';
+  } else {
+    const triggerInfo = {};
+
+    triggers.forEach(trigger => {
+      const handlerName = trigger.getHandlerFunction();
+      const eventType = trigger.getEventType();
+
+      if (!triggerInfo[handlerName]) {
+        triggerInfo[handlerName] = [];
+      }
+
+      if (eventType === ScriptApp.EventType.ON_EDIT) {
+        triggerInfo[handlerName].push('편집 시 실행');
+      } else if (eventType === ScriptApp.EventType.CLOCK) {
+        const source = trigger.getTriggerSource();
+        if (source === ScriptApp.TriggerSource.CLOCK) {
+          triggerInfo[handlerName].push('시간 기반');
+        }
+      } else if (eventType === ScriptApp.EventType.ON_OPEN) {
+        triggerInfo[handlerName].push('시트 열 때 실행');
+      }
+    });
+
+    for (let func in triggerInfo) {
+      message += `✅ ${func}: ${triggerInfo[func].join(', ')}\n`;
+    }
+
+    message += `\n총 ${triggers.length}개 트리거 실행 중`;
+
+    // onEditHandler 확인
+    if (triggerInfo['onEditHandler']) {
+      message += '\n\n✅ onEditHandler 트리거 정상';
+    } else {
+      message += '\n\n⚠️ onEditHandler 트리거 없음!\n조제완료, 입고완료, 재고조정이 작동하지 않습니다.';
+    }
+  }
+
+  Browser.msgBox('트리거 상태', message, Browser.Buttons.OK);
+}
+
+/**
+ * 처방 조제 테스트 (수동 실행)
+ */
+function testPrescriptionProcessing() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('처방상세');
+
+  if (!sheet) {
+    Browser.msgBox('오류', '처방상세 시트가 없습니다.', Browser.Buttons.OK);
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    Browser.msgBox('안내', '처방상세 시트에 조제할 항목이 없습니다.', Browser.Buttons.OK);
+    return;
+  }
+
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    '조제 테스트',
+    `처방상세 시트의 몇 번째 행을 조제 처리하시겠습니까?\n(2~${lastRow}):`,
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+
+  const row = parseInt(response.getResponseText());
+
+  if (isNaN(row) || row < 2 || row > lastRow) {
+    Browser.msgBox('오류', `2~${lastRow} 사이의 숫자를 입력하세요.`, Browser.Buttons.OK);
+    return;
+  }
+
+  try {
+    Logger.log('=== 수동 조제 테스트 시작 ===');
+    processPrescriptionDispense(row);
+    Browser.msgBox('성공', `${row}행 조제 처리가 완료되었습니다!\n\n약재출고 및 FIFO상세추적 시트를 확인하세요.`, Browser.Buttons.OK);
+  } catch (error) {
+    Logger.log('❌ 조제 테스트 실패: ' + error.message);
+    Logger.log(error.stack);
+    Browser.msgBox('조제 처리 오류', error.message, Browser.Buttons.OK);
+  }
 }
