@@ -3202,184 +3202,208 @@ function testSystem() {
  * 체크된 처방 수동 처리 (확인 후 처리)
  */
 function processCheckedNow() {
-  Logger.log('=== 체크된 처방 확인 시작 ===\n');
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('처방상세');
-  
-  if (!sheet) {
-    Browser.msgBox('오류', '처방상세 시트를 찾을 수 없습니다.', Browser.Buttons.OK);
-    return;
-  }
-  
-  const lastRow = sheet.getLastRow();
-  
-  if (lastRow <= 1) {
-    Browser.msgBox('알림', '처방상세 시트에 데이터가 없습니다.', Browser.Buttons.OK);
-    return;
-  }
-  
-  // ===== 1단계: 체크된 항목 수집 =====
-  let checkedItems = [];
-  
-  for (let row = 2; row <= lastRow; row++) {
-    const isChecked = sheet.getRange(row, 10).getValue();
-    
-    if (isChecked === true) {
-      const prescriptionNumber = sheet.getRange(row, 1).getValue();
-      const prescriptionName = sheet.getRange(row, 2).getValue();
-      const patientName = sheet.getRange(row, 4).getValue();
-      const herbName = sheet.getRange(row, 6).getValue();
-      const amount = sheet.getRange(row, 9).getValue();
-      
-      checkedItems.push({
-        row: row,
-        prescriptionNumber: prescriptionNumber,
-        prescriptionName: prescriptionName,
-        patientName: patientName,
-        herbName: herbName,
-        amount: amount
-      });
-    }
-  }
-  
-  if (checkedItems.length === 0) {
-    Browser.msgBox('알림', '체크된 항목이 없습니다.', Browser.Buttons.OK);
-    return;
-  }
-  
-  Logger.log(`체크된 항목: ${checkedItems.length}개`);
-  
-  // ===== 2단계: 재고 확인 =====
-  let stockCheckResults = [];
-  let allAvailable = true;
-  
-  for (let item of checkedItems) {
-    try {
-      // 재고만 확인 (차감하지 않음)
-      const stockCheck = checkStockAvailability(item.herbName, item.amount);
-      stockCheckResults.push({
-        item: item,
-        available: true,
-        message: `✅ ${item.herbName} ${item.amount}g (재고: ${stockCheck.totalAvailable}g)`
-      });
-    } catch (error) {
-      allAvailable = false;
-      stockCheckResults.push({
-        item: item,
-        available: false,
-        message: `❌ ${item.herbName} ${item.amount}g (${error.message})`
-      });
-    }
-  }
-  
-  // ===== 3단계: 사용자 확인 =====
-  const ui = SpreadsheetApp.getUi();
-  let confirmMessage = `처리할 항목: ${checkedItems.length}개\n\n`;
-  
-  if (allAvailable) {
-    confirmMessage += '✅ 모든 약재 재고 충분\n\n';
-    stockCheckResults.forEach(result => {
-      confirmMessage += result.message + '\n';
-    });
-    confirmMessage += '\n처리하시겠습니까?';
-    
-    const response = ui.alert(
-      '조제 처리 확인',
-      confirmMessage,
-      ui.ButtonSet.YES_NO
-    );
-    
-    Logger.log(`사용자 응답 (모든 재고 충분): ${response}`);
-    
-    if (response !== ui.Button.YES) {
-      Logger.log('사용자가 처리를 취소했습니다.');
+  try {
+    Logger.log('=== 체크된 처방 확인 시작 ===\n');
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('처방상세');
+
+    if (!sheet) {
+      Browser.msgBox('오류', '처방상세 시트를 찾을 수 없습니다.', Browser.Buttons.OK);
       return;
     }
-    
-  } else {
-    // 재고 부족 항목 있음
-    confirmMessage += '⚠️ 일부 약재 재고 부족\n\n';
-    stockCheckResults.forEach(result => {
-      confirmMessage += result.message + '\n';
-    });
-    confirmMessage += '\n✅ 표시된 항목만 처리하시겠습니까?';
-    
-    const response = ui.alert(
-      '재고 부족 항목 있음',
-      confirmMessage,
-      ui.ButtonSet.YES_NO
-    );
-    
-    Logger.log(`사용자 응답 (재고 부족 항목 있음): ${response}`);
-    
-    if (response !== ui.Button.YES) {
-      Logger.log('사용자가 처리를 취소했습니다.');
+
+    const lastRow = sheet.getLastRow();
+    Logger.log(`처방상세 시트 총 행 수: ${lastRow}`);
+
+    if (lastRow <= 1) {
+      Browser.msgBox('알림', '처방상세 시트에 데이터가 없습니다.', Browser.Buttons.OK);
       return;
     }
-  }
-  
-  Logger.log('사용자가 처리를 확인했습니다. 처리 시작...\n');
-  
-  // ===== 4단계: 실제 처리 =====
-  Logger.log('===== 실제 처리 시작 =====');
-  Logger.log(`처리할 항목 수: ${stockCheckResults.length}`);
-  
-  let successCount = 0;
-  let errorCount = 0;
-  let errorMessages = [];
-  let processedHerbs = new Set(); // ✅ 처리된 약재 목록
-  
-  // 뒤에서부터 처리 (행 삭제 대비)
-  for (let i = stockCheckResults.length - 1; i >= 0; i--) {
-    const result = stockCheckResults[i];
-    
-    Logger.log(`\n[${i}] 처리 시작: ${result.item.herbName} ${result.item.amount}g, 행번호: ${result.item.row}`);
-    
-    if (!result.available) {
-      // 재고 부족 처리...
-      errorCount++;
-      errorMessages.push(`${result.item.herbName}: 재고 부족`);
-      continue;
+
+    // ===== 1단계: 체크된 항목 수집 =====
+    Logger.log('1단계: 체크된 항목 수집 시작');
+    let checkedItems = [];
+
+    for (let row = 2; row <= lastRow; row++) {
+      const isChecked = sheet.getRange(row, 10).getValue();
+
+      if (isChecked === true) {
+        const prescriptionNumber = sheet.getRange(row, 1).getValue();
+        const prescriptionName = sheet.getRange(row, 2).getValue();
+        const patientName = sheet.getRange(row, 4).getValue();
+        const herbName = sheet.getRange(row, 6).getValue();
+        const amount = sheet.getRange(row, 9).getValue();
+
+        checkedItems.push({
+          row: row,
+          prescriptionNumber: prescriptionNumber,
+          prescriptionName: prescriptionName,
+          patientName: patientName,
+          herbName: herbName,
+          amount: amount
+        });
+
+        Logger.log(`  체크됨: ${row}행 - ${herbName} ${amount}g`);
+      }
     }
-    
-    try {
-      Logger.log(`  처리 시작: processPrescriptionDispense(${result.item.row}, true)`);
-      processPrescriptionDispense(result.item.row, true); // skipStockUpdate = true (배치 처리)
-      successCount++;
-      processedHerbs.add(result.item.herbName); // ✅ 처리된 약재 기록
-      Logger.log(`  ✅ 처리 성공`);
-      
-    } catch (error) {
-      Logger.log(`  ❌ 처리 실패: ${error.message}`);
-      errorCount++;
-      errorMessages.push(`${result.item.herbName}: ${error.message}`);
-      
-      // 체크박스 해제...
+
+    Logger.log(`체크된 항목 수집 완료: ${checkedItems.length}개`);
+
+    if (checkedItems.length === 0) {
+      Browser.msgBox('알림', '체크된 항목이 없습니다.', Browser.Buttons.OK);
+      return;
     }
+  
+    // ===== 2단계: 재고 확인 =====
+    Logger.log('\n2단계: 재고 확인 시작');
+    let stockCheckResults = [];
+    let allAvailable = true;
+
+    for (let item of checkedItems) {
+      try {
+        // 재고만 확인 (차감하지 않음)
+        const stockCheck = checkStockAvailability(item.herbName, item.amount);
+        stockCheckResults.push({
+          item: item,
+          available: true,
+          message: `✅ ${item.herbName} ${item.amount}g (재고: ${stockCheck.totalAvailable}g)`
+        });
+        Logger.log(`  ✅ ${item.herbName}: 재고 충분 (${stockCheck.totalAvailable}g)`);
+      } catch (error) {
+        allAvailable = false;
+        stockCheckResults.push({
+          item: item,
+          available: false,
+          message: `❌ ${item.herbName} ${item.amount}g (${error.message})`
+        });
+        Logger.log(`  ❌ ${item.herbName}: ${error.message}`);
+      }
+    }
+
+    Logger.log(`재고 확인 완료: 모두 충분 = ${allAvailable}`);
+
+    // ===== 3단계: 사용자 확인 =====
+    Logger.log('\n3단계: 사용자 확인');
+    const ui = SpreadsheetApp.getUi();
+    let confirmMessage = `처리할 항목: ${checkedItems.length}개\n\n`;
+
+    if (allAvailable) {
+      confirmMessage += '✅ 모든 약재 재고 충분\n\n';
+      stockCheckResults.forEach(result => {
+        confirmMessage += result.message + '\n';
+      });
+      confirmMessage += '\n처리하시겠습니까?';
+
+      const response = ui.alert(
+        '조제 처리 확인',
+        confirmMessage,
+        ui.ButtonSet.YES_NO
+      );
+
+      Logger.log(`사용자 응답 (모든 재고 충분): ${response}`);
+
+      if (response !== ui.Button.YES) {
+        Logger.log('사용자가 처리를 취소했습니다.');
+        return;
+      }
+
+    } else {
+      // 재고 부족 항목 있음
+      confirmMessage += '⚠️ 일부 약재 재고 부족\n\n';
+      stockCheckResults.forEach(result => {
+        confirmMessage += result.message + '\n';
+      });
+      confirmMessage += '\n✅ 표시된 항목만 처리하시겠습니까?';
+
+      const response = ui.alert(
+        '재고 부족 항목 있음',
+        confirmMessage,
+        ui.ButtonSet.YES_NO
+      );
+
+      Logger.log(`사용자 응답 (재고 부족 항목 있음): ${response}`);
+
+      if (response !== ui.Button.YES) {
+        Logger.log('사용자가 처리를 취소했습니다.');
+        return;
+      }
+    }
+
+    Logger.log('사용자가 처리를 확인했습니다. 처리 시작...\n');
+
+    // ===== 4단계: 실제 처리 =====
+    Logger.log('4단계: 실제 처리 시작');
+    Logger.log(`처리할 항목 수: ${stockCheckResults.length}`);
+
+    let successCount = 0;
+    let errorCount = 0;
+    let errorMessages = [];
+    let processedHerbs = new Set(); // ✅ 처리된 약재 목록
+
+    // 뒤에서부터 처리 (행 삭제 대비)
+    for (let i = stockCheckResults.length - 1; i >= 0; i--) {
+      const result = stockCheckResults[i];
+
+      Logger.log(`\n[${i}] 처리 시작: ${result.item.herbName} ${result.item.amount}g, 행번호: ${result.item.row}`);
+
+      if (!result.available) {
+        // 재고 부족 처리...
+        errorCount++;
+        errorMessages.push(`${result.item.herbName}: 재고 부족`);
+        Logger.log(`  ⚠️ 재고 부족으로 스킵`);
+        continue;
+      }
+
+      try {
+        Logger.log(`  처리 시작: processPrescriptionDispense(${result.item.row}, true)`);
+        processPrescriptionDispense(result.item.row, true); // skipStockUpdate = true (배치 처리)
+        successCount++;
+        processedHerbs.add(result.item.herbName); // ✅ 처리된 약재 기록
+        Logger.log(`  ✅ 처리 성공`);
+
+      } catch (error) {
+        Logger.log(`  ❌ 처리 실패: ${error.message}`);
+        Logger.log(`  스택: ${error.stack}`);
+        errorCount++;
+        errorMessages.push(`${result.item.herbName}: ${error.message}`);
+      }
+    }
+
+    Logger.log(`\n===== 처리 완료 =====`);
+    Logger.log(`✅ 성공: ${successCount}개`);
+    Logger.log(`❌ 실패: ${errorCount}개`);
+
+    // ✅ 처리된 약재들의 마스터 재고 일괄 업데이트
+    if (processedHerbs.size > 0) {
+      Logger.log(`\n===== 약재마스터 재고 업데이트 =====`);
+      processedHerbs.forEach(herbName => {
+        updateSingleHerbStock(herbName);
+      });
+      Logger.log(`✅ ${processedHerbs.size}개 약재 재고 업데이트 완료`);
+    }
+  
+    // ===== 5단계: 결과 알림 =====
+    Logger.log('\n5단계: 결과 알림');
+    let resultMessage = `조제 처리 완료\n\n✅ 성공: ${successCount}개\n❌ 실패: ${errorCount}개`;
+
+    if (errorMessages.length > 0) {
+      resultMessage += '\n\n실패 내역:\n' + errorMessages.join('\n');
+    }
+
+    Browser.msgBox('처리 완료', resultMessage, Browser.Buttons.OK);
+    Logger.log('=== 체크된 처방 처리 완료 ===\n');
+
+  } catch (error) {
+    Logger.log('❌❌❌ processCheckedNow 전체 오류 ❌❌❌');
+    Logger.log('오류 메시지: ' + error.message);
+    Logger.log('오류 스택:\n' + error.stack);
+    Browser.msgBox(
+      '조제 처리 오류',
+      '처리 중 오류가 발생했습니다:\n\n' + error.message + '\n\n로그를 확인하세요.',
+      Browser.Buttons.OK
+    );
   }
-  
-  Logger.log(`\n===== 처리 완료 =====`);
-  Logger.log(`✅ 성공: ${successCount}개`);
-  Logger.log(`❌ 실패: ${errorCount}개`);
-  
-  // ✅ 처리된 약재들의 마스터 재고 일괄 업데이트
-  if (processedHerbs.size > 0) {
-    Logger.log(`\n===== 약재마스터 재고 업데이트 =====`);
-    processedHerbs.forEach(herbName => {
-      updateSingleHerbStock(herbName);
-    });
-    Logger.log(`✅ ${processedHerbs.size}개 약재 재고 업데이트 완료`);
-  }
-  
-  // ===== 5단계: 결과 알림 =====
-  let resultMessage = `조제 처리 완료\n\n✅ 성공: ${successCount}개\n❌ 실패: ${errorCount}개`;
-  
-  if (errorMessages.length > 0) {
-    resultMessage += '\n\n실패 내역:\n' + errorMessages.join('\n');
-  }
-  
-  Browser.msgBox('처리 완료', resultMessage, Browser.Buttons.OK);
 }
 
 /**
