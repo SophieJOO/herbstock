@@ -817,8 +817,101 @@ function onEditHandler(e) {
   // 처방상세 시트 조제완료 체크
   onPrescriptionEdit(e);
 
+  // 처방상세 시트 수정 → 처방입력 시트 동기화
+  onPrescriptionDetailEdit(e);
+
   // 약재입고 시트 잔량 수정
   onIncomingStockEdit(e);
+}
+
+/**
+ * 처방상세 시트 수정 시 처방입력 시트에 자동 동기화
+ */
+function onPrescriptionDetailEdit(e) {
+  try {
+    if (!e || !e.source) {
+      return;
+    }
+
+    const sheet = e.source.getActiveSheet();
+    const range = e.range;
+
+    // 처방상세 시트가 아니면 무시
+    if (sheet.getName() !== '처방상세') {
+      return;
+    }
+
+    const editedRow = range.getRow();
+    const editedCol = range.getColumn();
+
+    // 헤더 행은 무시
+    if (editedRow === 1) {
+      return;
+    }
+
+    // A~E열 (처방전번호, 처방명, 처방일, 환자명, 차트번호)만 처리
+    if (editedCol < 1 || editedCol > 5) {
+      return;
+    }
+
+    Logger.log(`📝 처방상세 수정 감지: ${editedRow}행, ${editedCol}열`);
+
+    // 처방상세 시트의 해당 행 데이터 읽기
+    const detailData = sheet.getRange(editedRow, 1, 1, 5).getValues()[0];
+    const prescriptionNumber = detailData[0];  // A열: 처방전번호
+    const prescriptionName = detailData[1];    // B열: 처방명
+    const prescriptionDate = detailData[2];    // C열: 처방일
+    const patientName = detailData[3];         // D열: 환자명
+    const chartNumber = detailData[4];         // E열: 차트번호
+
+    if (!prescriptionNumber) {
+      Logger.log('⚠️ 처방전번호가 없어서 동기화를 건너뜁니다.');
+      return;
+    }
+
+    // 처방입력 시트에서 해당 처방전번호 찾기
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const prescInputSheet = ss.getSheetByName('처방입력');
+
+    if (!prescInputSheet) {
+      Logger.log('⚠️ 처방입력 시트가 없습니다.');
+      return;
+    }
+
+    const prescInputData = prescInputSheet.getDataRange().getValues();
+    let prescInputRow = -1;
+
+    for (let i = 1; i < prescInputData.length; i++) {
+      if (prescInputData[i][0] === prescriptionNumber) {  // A열: 처방전번호
+        prescInputRow = i + 1;
+        break;
+      }
+    }
+
+    if (prescInputRow === -1) {
+      Logger.log(`⚠️ 처방입력 시트에서 처방전번호 ${prescriptionNumber}를 찾을 수 없습니다.`);
+      return;
+    }
+
+    // 수정된 컬럼에 따라 처방입력 시트 업데이트
+    const columnMapping = {
+      1: { inputCol: 1, name: '처방전번호' },  // A → A
+      2: { inputCol: 3, name: '처방명' },      // B → C
+      3: { inputCol: 2, name: '처방일' },      // C → B
+      4: { inputCol: 5, name: '환자명' },      // D → E
+      5: { inputCol: 4, name: '차트번호' }     // E → D
+    };
+
+    const mapping = columnMapping[editedCol];
+    if (mapping) {
+      const newValue = detailData[editedCol - 1];
+      prescInputSheet.getRange(prescInputRow, mapping.inputCol).setValue(newValue);
+      Logger.log(`✅ 처방입력 동기화: ${mapping.name} → "${newValue}"`);
+    }
+
+  } catch (error) {
+    Logger.log(`❌ 처방상세→처방입력 동기화 오류: ${error.message}`);
+  }
 }
 
 /**
