@@ -1893,13 +1893,16 @@ function processPrescriptionDispense(row) {
   
   // ✅ 출고 즉시 원가 누적 업데이트
   updatePrescriptionCostIncremental(prescriptionNumber, herbCost);
-  
+
   // 처방상세에서 해당 행 삭제
   detailSheet.deleteRow(row);
-  
+
   // 처방 완료 확인
   checkAndCompletePrescription(prescriptionNumber);
-  
+
+  // ✅ 약재마스터 재고 즉시 업데이트 (출고 즉시 반영)
+  updateSingleHerbStock(herbName);
+
   Logger.log(`  ✅ ${herbName} ${totalAmount}g 출고 완료 (원가: ${herbCost}원)`);
 }
 
