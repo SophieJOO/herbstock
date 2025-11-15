@@ -605,7 +605,7 @@ function onTempIncomingEdit(e) {
 }
 
 /**
- * 약재입고 시트 F열(잔량) 편집 트리거: 해당 약재 재고 즉시 업데이트
+ * 약재입고 시트 F열(잔량) 편집 트리거: 해당 약재 재고 즉시 업데이트 + 조정이력 기록
  */
 function onIncomingStockEdit(e) {
   try {
@@ -626,15 +626,32 @@ function onIncomingStockEdit(e) {
     const row = range.getRow();
     if (row === 1) return;  // 헤더 제외
 
-    // 편집된 행의 약재명 추출 (C열)
-    const herbName = sheet.getRange(row, 3).getValue();
+    // 편집된 행의 데이터 추출
+    const rowData = sheet.getRange(row, 1, 1, 11).getValues()[0];
+    const incomingNumber = rowData[0];  // A열: 입고번호
+    const incomingDate = rowData[1];    // B열: 입고일
+    const herbName = rowData[2];        // C열: 약재명
+    const incomingAmount = rowData[3];  // D열: 입고량
+    const expiryDate = rowData[4];      // E열: 유통기한
+    const newRemaining = parseFloat(range.getValue()) || 0;  // F열: 새 잔량
+    const oldRemaining = parseFloat(e.oldValue) || 0;  // 이전 잔량
 
     if (!herbName || herbName.trim() === '') {
       Logger.log('⚠️ 약재명이 없습니다.');
       return;
     }
 
-    Logger.log(`🔄 잔량 수정 감지: ${herbName} (${row}행) - 약재마스터 업데이트 시작`);
+    // 값이 변경되지 않았으면 무시
+    if (oldRemaining === newRemaining) {
+      return;
+    }
+
+    const difference = newRemaining - oldRemaining;
+
+    Logger.log(`🔄 잔량 수정 감지: ${herbName} (${row}행) ${oldRemaining}g → ${newRemaining}g (${difference > 0 ? '+' : ''}${difference}g)`);
+
+    // 재고조정이력 기록
+    recordStockAdjustment(incomingNumber, incomingDate, herbName, incomingAmount, expiryDate, oldRemaining, newRemaining, difference);
 
     // 해당 약재만 업데이트
     updateSingleHerbStock(herbName);
@@ -644,6 +661,149 @@ function onIncomingStockEdit(e) {
   } catch (error) {
     Logger.log(`⚠️ 약재입고 편집 트리거 오류: ${error.message}`);
   }
+}
+
+/**
+ * 재고조정이력 기록
+ */
+function recordStockAdjustment(incomingNumber, incomingDate, herbName, incomingAmount, expiryDate, oldRemaining, newRemaining, difference) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let adjustmentSheet = ss.getSheetByName('재고조정이력');
+
+  // 시트가 없으면 생성
+  if (!adjustmentSheet) {
+    adjustmentSheet = ss.insertSheet('재고조정이력');
+    const headers = [
+      '조정일시', '입고번호', '약재명', '입고량(g)', '유통기한',
+      '조정 전 잔량(g)', '조정 후 잔량(g)', '조정량(g)', '조정 유형', '조정 사유', '담당자'
+    ];
+    adjustmentSheet.appendRow(headers);
+
+    const headerRange = adjustmentSheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#ff9900');
+    headerRange.setFontWeight('bold');
+    headerRange.setHorizontalAlignment('center');
+  }
+
+  // 조정 유형 선택 UI
+  const ui = SpreadsheetApp.getUi();
+
+  const typeResponse = ui.prompt(
+    '재고 조정 유형',
+    `${herbName} 잔량이 ${oldRemaining}g → ${newRemaining}g로 변경되었습니다.\n\n` +
+    `조정 유형을 선택하세요:\n` +
+    `1. 폐기 (유통기한 임박, 변질, 파손 등)\n` +
+    `2. 타 한의원 대여\n` +
+    `3. 단순 조정 (재고 실사, 오입력 수정 등)\n\n` +
+    `번호를 입력하세요 (1-3):`,
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  let typeLabel = '';
+  let reason = '';
+
+  if (typeResponse.getSelectedButton() === ui.Button.CANCEL) {
+    typeLabel = '단순 조정';
+    reason = '사유 미입력 (취소됨)';
+  } else {
+    const typeNum = typeResponse.getResponseText().trim();
+
+    if (typeNum === '1') {
+      // 폐기
+      typeLabel = '폐기';
+      const response = ui.prompt(
+        '폐기 사유',
+        '폐기 사유를 입력하세요 (예: 유통기한 임박, 변질, 파손 등):',
+        ui.ButtonSet.OK_CANCEL
+      );
+
+      if (response.getSelectedButton() === ui.Button.OK) {
+        reason = response.getResponseText();
+      } else {
+        reason = '사유 미입력';
+      }
+    } else if (typeNum === '2') {
+      // 타 한의원 대여
+      typeLabel = '타 한의원 대여';
+      const response = ui.prompt(
+        '대여 정보',
+        '대여처 정보를 입력하세요 (예: OO한의원, 반환예정일: 2024-01-15):',
+        ui.ButtonSet.OK_CANCEL
+      );
+
+      if (response.getSelectedButton() === ui.Button.OK) {
+        reason = response.getResponseText();
+      } else {
+        reason = '정보 미입력';
+      }
+    } else {
+      // 3 또는 기타 = 단순 조정
+      typeLabel = '단순 조정';
+      const response = ui.prompt(
+        '조정 사유',
+        '조정 사유를 입력하세요 (예: 재고 실사, 오입력 수정 등):',
+        ui.ButtonSet.OK_CANCEL
+      );
+
+      if (response.getSelectedButton() === ui.Button.OK) {
+        reason = response.getResponseText() || '사유 미입력';
+      } else {
+        reason = '사유 미입력';
+      }
+    }
+  }
+
+  // 담당자 (현재 사용자)
+  const user = Session.getActiveUser().getEmail();
+
+  // 조정 일시
+  const now = new Date();
+  const adjustmentTime = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+
+  // 유통기한 포맷
+  let expiryDateStr = '';
+  if (expiryDate instanceof Date) {
+    expiryDateStr = Utilities.formatDate(expiryDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  } else if (expiryDate) {
+    expiryDateStr = String(expiryDate);
+  }
+
+  // 입고일 포맷
+  let incomingDateStr = '';
+  if (incomingDate instanceof Date) {
+    incomingDateStr = Utilities.formatDate(incomingDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  } else if (incomingDate) {
+    incomingDateStr = String(incomingDate);
+  }
+
+  // 데이터 추가
+  const newRow = [
+    adjustmentTime,
+    incomingNumber,
+    herbName,
+    incomingAmount,
+    expiryDateStr,
+    oldRemaining,
+    newRemaining,
+    difference,
+    typeLabel,
+    reason,
+    user
+  ];
+
+  adjustmentSheet.appendRow(newRow);
+
+  // 마지막 행 색상 구분 (조정량이 음수면 빨강, 양수면 파랑)
+  const lastRow = adjustmentSheet.getLastRow();
+  const colorRange = adjustmentSheet.getRange(lastRow, 8);  // H열: 조정량
+
+  if (difference < 0) {
+    colorRange.setBackground('#f4cccc');  // 빨강 (감소)
+  } else if (difference > 0) {
+    colorRange.setBackground('#d9ead3');  // 초록 (증가)
+  }
+
+  Logger.log(`✅ 재고조정이력 기록: ${herbName} ${difference > 0 ? '+' : ''}${difference}g (${typeLabel})`);
 }
 
 /**
