@@ -2813,24 +2813,6 @@ function sendOCRCompletedSlack(data, count) {
   sendSlackMessage(webhookUrl, payload);
 }
 
-function sendIncomingCompletedSlack(data) {
-  const webhookUrl = getConfig('SLACK_WEBHOOK_URL');
-  if (!webhookUrl) return;
-  
-  const payload = {
-    text: `✅ 입고 완료: ${data.herbName}`,
-    blocks: [{
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": `*✅ 약재 입고 완료 (✨ FIFO 원가 계산 준비)*\n\n*약재명:* ${data.herbName}\n*수량:* ${data.quantity}봉 × ${data.bagSize}g = ${data.totalAmount}g\n*g당 단가:* ${data.pricePerGram}원/g\n\n📦 처방 시 실제 구매 가격으로 정확한 원가 계산됩니다!`
-      }
-    }]
-  };
-  
-  sendSlackMessage(webhookUrl, payload);
-}
-
 function sendPrescriptionProcessedSlack(data) {
   const webhookUrl = getConfig('SLACK_WEBHOOK_URL');
   if (!webhookUrl) return;
@@ -2912,6 +2894,36 @@ function sendExpiringHerbsAlert(expiringHerbs) {
   };
   
   sendSlackMessage(webhookUrl, payload);
+}
+
+/**
+ * Slack 메시지 전송 (공통 함수)
+ */
+function sendSlackMessage(webhookUrl, payload) {
+  if (!webhookUrl) {
+    Logger.log('⚠️ Slack Webhook URL이 설정되지 않았습니다.');
+    return;
+  }
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(webhookUrl, options);
+    const statusCode = response.getResponseCode();
+
+    if (statusCode === 200) {
+      Logger.log('✅ Slack 메시지 전송 성공');
+    } else {
+      Logger.log(`⚠️ Slack 메시지 전송 실패: ${statusCode} - ${response.getContentText()}`);
+    }
+  } catch (error) {
+    Logger.log(`❌ Slack 메시지 전송 오류: ${error.message}`);
+  }
 }
 
 // ========================================
@@ -3201,113 +3213,6 @@ function processCheckedNow() {
 /**
  * 약재입고 시트에서 입고번호 없는 행 찾기
  */
-function findMissingIncomingNumbers() {
-  Logger.log('=== 입고번호 누락 확인 ===\n');
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const incomingSheet = ss.getSheetByName('약재입고');
-  
-  if (!incomingSheet) {
-    Logger.log('❌ 약재입고 시트 없음');
-    return;
-  }
-  
-  const data = incomingSheet.getDataRange().getValues();
-  let problemRows = [];
-  
-  for (let i = 1; i < data.length; i++) {
-    const incomingNumber = data[i][0];  // A열: 입고번호
-    const herbName = data[i][2];        // C열: 약재명
-    const remaining = data[i][5];       // F열: 잔량
-    
-    // 입고번호가 없는데 잔량이 있는 경우
-    if (!incomingNumber && remaining > 0) {
-      Logger.log(`⚠️ ${i+1}행: 입고번호 없음 - ${herbName} (잔량: ${remaining}g)`);
-      problemRows.push({
-        row: i + 1,
-        herbName: herbName,
-        remaining: remaining
-      });
-    }
-  }
-  
-  if (problemRows.length === 0) {
-    Logger.log('✅ 모든 입고 행에 입고번호가 있습니다.');
-  } else {
-    Logger.log(`\n❌ 입고번호 없는 행: ${problemRows.length}개`);
-    Logger.log('\n해결 방법:');
-    Logger.log('1. 약재입고 시트로 이동');
-    Logger.log('2. 해당 행들의 입고번호(A열)를 채워주세요');
-    Logger.log('   예: IN20251025-001, IN20251025-002 등');
-  }
-  
-  Logger.log('\n=== 확인 완료 ===');
-  
-  return problemRows;
-}
-
-/**
- * 입고번호 없는 행에 자동으로 번호 부여
- */
-function autoAssignIncomingNumbers() {
-  Logger.log('=== 자동 입고번호 부여 시작 ===\n');
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const incomingSheet = ss.getSheetByName('약재입고');
-  
-  if (!incomingSheet) {
-    Logger.log('❌ 약재입고 시트 없음');
-    return;
-  }
-  
-  const data = incomingSheet.getDataRange().getValues();
-  let assignedCount = 0;
-  
-  // 오늘 날짜로 시작하는 입고번호 중 가장 큰 번호 찾기
-  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
-  let maxSeq = 0;
-  
-  for (let i = 1; i < data.length; i++) {
-    const incomingNumber = data[i][0];
-    
-    if (incomingNumber && incomingNumber.startsWith('IN' + today)) {
-      const seqStr = incomingNumber.split('-')[1];
-      const seq = parseInt(seqStr) || 0;
-      if (seq > maxSeq) {
-        maxSeq = seq;
-      }
-    }
-  }
-  
-  Logger.log(`오늘 날짜(${today})의 최대 번호: ${maxSeq}`);
-  
-  // 입고번호 없는 행에 부여
-  for (let i = 1; i < data.length; i++) {
-    const incomingNumber = data[i][0];
-    const herbName = data[i][2];
-    const remaining = data[i][5];
-    
-    // 입고번호가 없고 약재명이 있는 경우
-    if (!incomingNumber && herbName) {
-      maxSeq++;
-      const newNumber = `IN${today}-${String(maxSeq).padStart(3, '0')}`;
-      
-      incomingSheet.getRange(i + 1, 1).setValue(newNumber);
-      assignedCount++;
-      
-      Logger.log(`✅ ${i+1}행: ${herbName} → ${newNumber}`);
-    }
-  }
-  
-  Logger.log(`\n=== 완료: ${assignedCount}개 행에 입고번호 부여 ===`);
-  
-  Browser.msgBox(
-    '완료',
-    `${assignedCount}개 행에 입고번호가 자동으로 부여되었습니다.`,
-    Browser.Buttons.OK
-  );
-}
-
 /**
  * 처방입력 시트에 원가 컬럼 추가
  */
