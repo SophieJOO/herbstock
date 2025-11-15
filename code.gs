@@ -2233,6 +2233,127 @@ function updateCurrentStock() {
 }
 
 /**
+ * 재고분석 시트 자동 업데이트
+ * 약재명|총입고|총출고|현재고|재고회전율
+ */
+function updateInventoryAnalysis() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const masterSheet = ss.getSheetByName('약재마스터');
+  const incomingSheet = ss.getSheetByName('약재입고');
+  const prescDetailSheet = ss.getSheetByName('처방상세');
+  let analysisSheet = ss.getSheetByName('재고분석');
+
+  if (!masterSheet) {
+    Logger.log('❌ 약재마스터 시트가 없습니다.');
+    return;
+  }
+
+  // 재고분석 시트가 없으면 생성
+  if (!analysisSheet) {
+    analysisSheet = ss.insertSheet('재고분석');
+    const headers = ['약재명', '총입고', '총출고', '현재고', '재고회전율'];
+    analysisSheet.appendRow(headers);
+
+    const headerRange = analysisSheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#1a73e8');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+    Logger.log('✅ 재고분석 시트 생성 완료');
+  }
+
+  const masterData = masterSheet.getDataRange().getValues();
+
+  // 약재입고 데이터
+  let incomingData = [];
+  if (incomingSheet) {
+    incomingData = incomingSheet.getDataRange().getValues();
+  } else {
+    Logger.log('⚠️ 약재입고 시트가 없습니다.');
+  }
+
+  // 처방상세 데이터
+  let prescDetailData = [];
+  if (prescDetailSheet) {
+    prescDetailData = prescDetailSheet.getDataRange().getValues();
+  } else {
+    Logger.log('⚠️ 처방상세 시트가 없습니다.');
+  }
+
+  Logger.log('=== 재고분석 업데이트 시작 ===');
+
+  // 기존 데이터 초기화 (헤더 제외)
+  if (analysisSheet.getLastRow() > 1) {
+    analysisSheet.getRange(2, 1, analysisSheet.getLastRow() - 1, 5).clearContent();
+  }
+
+  const analysisData = [];
+
+  // 약재마스터의 모든 약재에 대해 계산
+  for (let i = 1; i < masterData.length; i++) {
+    const herbName = masterData[i][0];  // A열: 약재명
+    const currentStock = parseFloat(masterData[i][2]) || 0;  // C열: 현재재고
+
+    if (!herbName || herbName.trim() === '') {
+      continue;
+    }
+
+    // 총입고량 계산 (약재입고 시트의 D열: 입고량 합계)
+    let totalIncoming = 0;
+    for (let j = 1; j < incomingData.length; j++) {
+      if (incomingData[j][2] === herbName) {  // C열: 약재명
+        const incomingAmount = parseFloat(incomingData[j][3]) || 0;  // D열: 입고량
+        totalIncoming += incomingAmount;
+      }
+    }
+
+    // 총출고량 계산 (처방상세 시트의 I열: 총수량 합계)
+    let totalDispensed = 0;
+    for (let k = 1; k < prescDetailData.length; k++) {
+      if (prescDetailData[k][5] === herbName) {  // F열: 약재명
+        const dispensedAmount = parseFloat(prescDetailData[k][8]) || 0;  // I열: 총수량(g)
+        totalDispensed += dispensedAmount;
+      }
+    }
+
+    // 재고회전율 계산 (총출고 ÷ 현재고)
+    let turnoverRate = '';
+    if (currentStock > 0 && totalDispensed > 0) {
+      turnoverRate = (totalDispensed / currentStock).toFixed(2);
+    } else if (currentStock === 0 && totalDispensed > 0) {
+      turnoverRate = '∞';  // 재고 없이 출고만 있는 경우
+    } else {
+      turnoverRate = 'N/A';  // 출고 없음
+    }
+
+    analysisData.push([
+      herbName,
+      Math.round(totalIncoming * 10) / 10,  // 소수점 1자리
+      Math.round(totalDispensed * 10) / 10,
+      Math.round(currentStock * 10) / 10,
+      turnoverRate
+    ]);
+
+    Logger.log(`${herbName}: 입고 ${totalIncoming}g, 출고 ${totalDispensed}g, 재고 ${currentStock}g, 회전율 ${turnoverRate}`);
+  }
+
+  // 재고분석 시트에 데이터 입력
+  if (analysisData.length > 0) {
+    analysisSheet.getRange(2, 1, analysisData.length, 5).setValues(analysisData);
+  }
+
+  // 숫자 컬럼 정렬 및 포맷
+  if (analysisData.length > 0) {
+    // B~D열 숫자 포맷 (천단위 구분)
+    analysisSheet.getRange(2, 2, analysisData.length, 3).setNumberFormat('#,##0.0');
+
+    // E열 재고회전율 (소수점 2자리)
+    analysisSheet.getRange(2, 5, analysisData.length, 1).setHorizontalAlignment('right');
+  }
+
+  Logger.log(`✅ 재고분석 업데이트 완료 (${analysisData.length}개 약재)`);
+}
+
+/**
  * 가장 빠른 유통기한 가져오기 (잔량이 있는 것만)
  */
 function getNearestExpiryDate(herbName) {
@@ -2967,7 +3088,14 @@ function setupAllTriggers() {
     .everyHours(1)
     .create();
   Logger.log('✅ updateCurrentStock 트리거 생성');
-  
+
+  // 3-1. 재고분석 자동 업데이트 (1시간마다)
+  ScriptApp.newTrigger('updateInventoryAnalysis')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('✅ updateInventoryAnalysis 트리거 생성');
+
   // 4. 유통기한 확인 (매일 오전 9시)
   ScriptApp.newTrigger('checkExpiringHerbs')
     .timeBased()
@@ -2993,6 +3121,36 @@ function setupAllTriggers() {
 
   Logger.log('\n✅✅✅ 모든 트리거 설정 완료!');
   Browser.msgBox('완료', '모든 트리거가 설정되었습니다!', Browser.Buttons.OK);
+}
+
+/**
+ * 재고 업데이트 트리거만 설정 (개별 설정용)
+ */
+function setupStockUpdateTrigger() {
+  // 기존 재고 업데이트 트리거 삭제
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'updateCurrentStock' ||
+        trigger.getHandlerFunction() === 'updateInventoryAnalysis') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  Logger.log('기존 재고 업데이트 트리거 삭제 완료');
+
+  // 재고 자동 업데이트 트리거 생성
+  ScriptApp.newTrigger('updateCurrentStock')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('✅ updateCurrentStock 트리거 생성');
+
+  ScriptApp.newTrigger('updateInventoryAnalysis')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('✅ updateInventoryAnalysis 트리거 생성');
+
+  Browser.msgBox('완료', '재고 업데이트 트리거가 설정되었습니다!\n\n- 약재마스터 재고 업데이트 (1시간마다)\n- 재고분석 업데이트 (1시간마다)', Browser.Buttons.OK);
 }
 
 // ========================================
@@ -3885,6 +4043,7 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('📊 재고 관리')
       .addItem('🔄 약재마스터 재고 업데이트', 'updateCurrentStock')
+      .addItem('📊 재고분석 업데이트', 'updateInventoryAnalysis')
       .addItem('⏰ 자동 업데이트 트리거 설정', 'setupStockUpdateTrigger')
       .addSeparator()
       .addItem('🔍 약재입고 시트 구조 확인', 'checkIncomingSheetStructure')
