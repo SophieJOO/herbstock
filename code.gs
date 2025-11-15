@@ -808,8 +808,9 @@ function recordStockAdjustment(incomingNumber, incomingDate, herbName, incomingA
 
 /**
  * 통합 편집 트리거 (모든 시트 편집 감지)
+ * 주의: 함수명을 onEdit으로 하면 Simple Trigger와 중복 실행되므로 다른 이름 사용
  */
-function onEdit(e) {
+function onEditHandler(e) {
   // 임시입고 시트 처리완료 체크
   onTempIncomingEdit(e);
 
@@ -2979,11 +2980,11 @@ function setupAllTriggers() {
   Logger.log('✅ autoUpdateMinimumStock 트리거 생성');
   
   // 6. 통합 편집 트리거 (임시입고, 처방상세, 약재입고)
-  ScriptApp.newTrigger('onEdit')
+  ScriptApp.newTrigger('onEditHandler')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
-  Logger.log('✅ 통합 onEdit 트리거 생성 (임시입고/처방상세/약재입고)');
+  Logger.log('✅ 통합 onEditHandler 트리거 생성 (임시입고/처방상세/약재입고)');
 
   Logger.log('\n✅✅✅ 모든 트리거 설정 완료!');
   Browser.msgBox('완료', '모든 트리거가 설정되었습니다!', Browser.Buttons.OK);
