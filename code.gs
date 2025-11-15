@@ -1788,18 +1788,20 @@ function onPrescriptionEdit(e) {
 
 /**
  * 처방상세 한 행의 조제 처리 (FIFO 차감) - 원가 계산 추가
+ * @param {number} row - 처방상세 시트의 행 번호
+ * @param {boolean} skipStockUpdate - true면 재고 업데이트 스킵 (배치 처리용)
  */
-function processPrescriptionDispense(row) {
+function processPrescriptionDispense(row, skipStockUpdate = false) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const detailSheet = ss.getSheetByName('처방상세');
-  
+
   if (!detailSheet) {
     throw new Error('처방상세 시트가 없습니다.');
   }
-  
+
   // 처방상세 시트에서 데이터 읽기
   const data = detailSheet.getRange(row, 1, 1, 10).getValues()[0];
-  
+
   const prescriptionNumber = data[0] || '';
   const prescriptionName = data[1] || '';
   const prescriptionDate = data[2] || new Date();
@@ -1807,44 +1809,44 @@ function processPrescriptionDispense(row) {
   const chartNumber = data[4] || '';
   const herbName = data[5];
   const totalAmount = parseFloat(data[8]) || 0;
-  
+
   Logger.log(`  조제 처리: ${herbName} ${totalAmount}g`);
-  
+
   if (!herbName || totalAmount <= 0) {
     throw new Error('약재명 또는 수량이 올바르지 않습니다.');
   }
-  
+
   // FIFO 할당 및 차감
   const batchInfo = allocateStockFIFO(herbName, totalAmount);
-  
+
   // ✅ 이 약재의 원가 계산
   const herbCost = batchInfo.reduce((sum, batch) => sum + batch.금액, 0);
   Logger.log(`  ${herbName} 원가: ${herbCost}원`);
-  
+
   // 약재출고 시트
   let dispenseSheet = ss.getSheetByName('약재출고');
   if (!dispenseSheet) {
     throw new Error('약재출고 시트가 없습니다.');
   }
-  
+
   // FIFO상세추적 시트
   let fifoDetailSheet = ss.getSheetByName('FIFO상세추적');
   if (!fifoDetailSheet) {
     fifoDetailSheet = ss.insertSheet('FIFO상세추적');
-    
+
     const headers = [
       '출고일', '처방전번호', '처방명', '환자명', '약재명',
-      '입고번호', '입고일', '유통기한', '출고량(g)', 
+      '입고번호', '입고일', '유통기한', '출고량(g)',
       '단가(원/g)', '금액(원)', '공급처'
     ];
     fifoDetailSheet.appendRow(headers);
-    
+
     const headerRange = fifoDetailSheet.getRange(1, 1, 1, headers.length);
     headerRange.setBackground('#34a853');
     headerRange.setFontColor('white');
     headerRange.setFontWeight('bold');
   }
-  
+
   // 처방의 정보 가져오기
   let doctor = '';
   const prescriptionSheet = ss.getSheetByName('처방입력');
@@ -1857,10 +1859,10 @@ function processPrescriptionDispense(row) {
       }
     }
   }
-  
+
   const batchSummary = batchInfo.map(b => `${b.입고번호}(${b.출고량}g)`).join(', ');
   const currentDate = new Date();
-  
+
   // 약재출고 시트에 기록
   dispenseSheet.appendRow([
     currentDate,
@@ -1872,7 +1874,7 @@ function processPrescriptionDispense(row) {
     chartNumber,
     batchSummary
   ]);
-  
+
   // FIFO상세추적 시트에 기록
   batchInfo.forEach(batch => {
     fifoDetailSheet.appendRow([
@@ -1890,7 +1892,7 @@ function processPrescriptionDispense(row) {
       batch.공급처
     ]);
   });
-  
+
   // ✅ 출고 즉시 원가 누적 업데이트
   updatePrescriptionCostIncremental(prescriptionNumber, herbCost);
 
@@ -1900,8 +1902,11 @@ function processPrescriptionDispense(row) {
   // 처방 완료 확인
   checkAndCompletePrescription(prescriptionNumber);
 
-  // ✅ 약재마스터 재고 즉시 업데이트 (출고 즉시 반영)
-  updateSingleHerbStock(herbName);
+  // ✅ 약재마스터 재고 즉시 업데이트 (배치 처리가 아닐 때만)
+  if (!skipStockUpdate) {
+    updateSingleHerbStock(herbName);
+    Logger.log(`  ✅ ${herbName} 재고 즉시 업데이트 완료`);
+  }
 
   Logger.log(`  ✅ ${herbName} ${totalAmount}g 출고 완료 (원가: ${herbCost}원)`);
 }
@@ -3339,8 +3344,8 @@ function processCheckedNow() {
     }
     
     try {
-      Logger.log(`  처리 시작: processPrescriptionDispense(${result.item.row})`);
-      processPrescriptionDispense(result.item.row);
+      Logger.log(`  처리 시작: processPrescriptionDispense(${result.item.row}, true)`);
+      processPrescriptionDispense(result.item.row, true); // skipStockUpdate = true (배치 처리)
       successCount++;
       processedHerbs.add(result.item.herbName); // ✅ 처리된 약재 기록
       Logger.log(`  ✅ 처리 성공`);
