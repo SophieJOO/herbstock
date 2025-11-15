@@ -849,20 +849,16 @@ function onPrescriptionDetailEdit(e) {
       return;
     }
 
-    // A~E열 (처방전번호, 처방명, 처방일, 환자명, 차트번호)만 처리
-    if (editedCol < 1 || editedCol > 5) {
+    // A~I열 (처방전번호~총수량)만 처리
+    if (editedCol < 1 || editedCol > 9) {
       return;
     }
 
     Logger.log(`📝 처방상세 수정 감지: ${editedRow}행, ${editedCol}열`);
 
     // 처방상세 시트의 해당 행 데이터 읽기
-    const detailData = sheet.getRange(editedRow, 1, 1, 5).getValues()[0];
+    const detailData = sheet.getRange(editedRow, 1, 1, 9).getValues()[0];
     const prescriptionNumber = detailData[0];  // A열: 처방전번호
-    const prescriptionName = detailData[1];    // B열: 처방명
-    const prescriptionDate = detailData[2];    // C열: 처방일
-    const patientName = detailData[3];         // D열: 환자명
-    const chartNumber = detailData[4];         // E열: 차트번호
 
     if (!prescriptionNumber) {
       Logger.log('⚠️ 처방전번호가 없어서 동기화를 건너뜁니다.');
@@ -893,20 +889,50 @@ function onPrescriptionDetailEdit(e) {
       return;
     }
 
-    // 수정된 컬럼에 따라 처방입력 시트 업데이트
-    const columnMapping = {
-      1: { inputCol: 1, name: '처방전번호' },  // A → A
-      2: { inputCol: 3, name: '처방명' },      // B → C
-      3: { inputCol: 2, name: '처방일' },      // C → B
-      4: { inputCol: 5, name: '환자명' },      // D → E
-      5: { inputCol: 4, name: '차트번호' }     // E → D
-    };
+    // A~E열 수정: 기본 정보 동기화
+    if (editedCol >= 1 && editedCol <= 5) {
+      const columnMapping = {
+        1: { inputCol: 1, name: '처방전번호' },  // A → A
+        2: { inputCol: 3, name: '처방명' },      // B → C
+        3: { inputCol: 2, name: '처방일' },      // C → B
+        4: { inputCol: 5, name: '환자명' },      // D → E
+        5: { inputCol: 4, name: '차트번호' }     // E → D
+      };
 
-    const mapping = columnMapping[editedCol];
-    if (mapping) {
-      const newValue = detailData[editedCol - 1];
-      prescInputSheet.getRange(prescInputRow, mapping.inputCol).setValue(newValue);
-      Logger.log(`✅ 처방입력 동기화: ${mapping.name} → "${newValue}"`);
+      const mapping = columnMapping[editedCol];
+      if (mapping) {
+        const newValue = detailData[editedCol - 1];
+        prescInputSheet.getRange(prescInputRow, mapping.inputCol).setValue(newValue);
+        Logger.log(`✅ 처방입력 동기화: ${mapping.name} → "${newValue}"`);
+      }
+    }
+
+    // F~I열 수정: 약재명, 용량, 첩수, 총수량 → 약재목록 재생성
+    if (editedCol >= 6 && editedCol <= 9) {
+      Logger.log(`약재 정보 수정됨, 약재목록 재생성 시작`);
+
+      // 같은 처방전번호의 모든 약재를 처방상세에서 가져오기
+      const detailSheetData = sheet.getDataRange().getValues();
+      const herbsList = [];
+
+      for (let i = 1; i < detailSheetData.length; i++) {
+        if (detailSheetData[i][0] === prescriptionNumber) {  // A열: 처방전번호
+          const herbName = detailSheetData[i][5];      // F열: 약재명
+          const amountPerCheop = detailSheetData[i][6]; // G열: 용량(g/첩)
+
+          if (herbName && amountPerCheop) {
+            herbsList.push(`${herbName} ${amountPerCheop}g`);
+          }
+        }
+      }
+
+      // 약재목록 텍스트 생성
+      const herbsListText = herbsList.join(', ');
+      Logger.log(`재생성된 약재목록: ${herbsListText}`);
+
+      // 처방입력 시트 K열(11번째 컬럼: 약재목록) 업데이트
+      prescInputSheet.getRange(prescInputRow, 11).setValue(herbsListText);
+      Logger.log(`✅ 약재목록 동기화 완료`);
     }
 
   } catch (error) {
