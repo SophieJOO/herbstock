@@ -2882,29 +2882,63 @@ function syncPatientToEMR(chartNumber, patientName, additionalInfo = {}) {
  */
 function syncPrescriptionToEMR(prescriptionData) {
   const emrId = getEMRSpreadsheetId();
-  
+
   if (!emrId) {
     Logger.log('⚠️ EMR 동기화 건너뜀');
     return;
   }
-  
+
   try {
     const emrSS = SpreadsheetApp.openById(emrId);
     const recordSheet = emrSS.getSheetByName('진료기록');
-    
+
     if (!recordSheet) {
       Logger.log('⚠️ 진료기록 시트 없음');
       return;
     }
-    
+
+    // 처방상세 시트에서 약재 정보 조회
+    let herbDetails = '';
+    if (prescriptionData.prescriptionNumber) {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const detailSheet = ss.getSheetByName('처방상세');
+
+      if (detailSheet) {
+        const detailData = detailSheet.getDataRange().getValues();
+        const herbs = [];
+
+        // 헤더를 제외하고 처방전번호가 일치하는 행 찾기
+        for (let i = 1; i < detailData.length; i++) {
+          const row = detailData[i];
+          const prescNumber = row[0]; // A: 처방전번호
+          const herbName = row[5];    // F: 약재명
+          const dosage = row[6];      // G: 용량
+
+          if (prescNumber === prescriptionData.prescriptionNumber && herbName) {
+            herbs.push(`${herbName}(${dosage}g)`);
+          }
+        }
+
+        if (herbs.length > 0) {
+          herbDetails = herbs.join(', ');
+        }
+      }
+    }
+
     // 진료번호 생성
     const timestamp = Utilities.formatDate(
-      new Date(), 
-      Session.getScriptTimeZone(), 
+      new Date(),
+      Session.getScriptTimeZone(),
       'yyyyMMddHHmmss'
     );
     const recordNumber = `R${timestamp}`;
-    
+
+    // 처방명과 약재 정보를 결합
+    let prescriptionInfo = prescriptionData.prescriptionName || '';
+    if (herbDetails) {
+      prescriptionInfo += ` [${herbDetails}]`;
+    }
+
     // 진료기록 추가
     recordSheet.appendRow([
       recordNumber,                      // 진료번호
@@ -2914,15 +2948,15 @@ function syncPrescriptionToEMR(prescriptionData) {
       '',                                // 주소(CC)
       '',                                // 현병력(PI)
       '',                                // 진단
-      prescriptionData.prescriptionName, // 처방명
+      prescriptionInfo,                  // 처방명 [약재명(용량), ...]
       prescriptionData.doctor,           // 처방의
       '',                                // 녹음파일ID
       '',                                // AI차팅
       '약재관리 시스템에서 동기화됨'    // 비고
     ]);
-    
+
     Logger.log(`✅ EMR 진료기록 동기화: ${recordNumber}`);
-    
+
   } catch (error) {
     Logger.log(`❌ EMR 진료기록 동기화 오류: ${error.message}`);
   }
@@ -2985,6 +3019,7 @@ function addPrescriptionToSheet(parsedData) {
         
         // 진료기록 동기화
         syncPrescriptionToEMR({
+          prescriptionNumber: prescriptionNumber,
           chartNumber: parsedData.chartNumber,
           patientName: parsedData.patientName,
           prescriptionName: parsedData.prescriptionName || '',
@@ -3028,6 +3063,7 @@ function addPrescriptionToSheet(parsedData) {
       );
       
       syncPrescriptionToEMR({
+        prescriptionNumber: prescriptionNumber,
         chartNumber: parsedData.chartNumber,
         patientName: parsedData.patientName,
         prescriptionName: parsedData.prescriptionName,
