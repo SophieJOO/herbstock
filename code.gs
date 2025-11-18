@@ -1118,9 +1118,31 @@ ${cleanedText}`;
 // ========================================
 
 /**
+ * 시트 편집 시 자동 트리거
+ */
+function onEdit(e) {
+  try {
+    if (!e || !e.source) {
+      return;
+    }
+
+    const sheet = e.source.getActiveSheet();
+    const range = e.range;
+
+    // 처방상세 시트의 조제완료 체크박스 처리
+    if (sheet.getName() === '처방상세' && range.getColumn() === 10) {
+      onPrescriptionEdit(e);
+    }
+
+  } catch (error) {
+    Logger.log('❌ onEdit 오류: ' + error.message);
+  }
+}
+
+/**
  * 처방상세 시트 편집 시 자동 조제 처리
  */
-function onPrescriptionEdit_DISABLED(e) {
+function onPrescriptionEdit(e) {
   try {
     if (!e || !e.source) {
       Logger.log('⚠️ 이 함수는 자동 트리거로만 실행됩니다.');
