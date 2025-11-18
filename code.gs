@@ -1113,91 +1113,6 @@ ${cleanedText}`;
   }
 }
 
-/**
- * 처방전 데이터를 처방입력/처방상세 시트에 추가
- */
-function addPrescriptionToSheet(parsedData) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // 1. 처방입력 시트 처리
-  let prescInputSheet = ss.getSheetByName('처방입력');
-  
-  if (!prescInputSheet) {
-    prescInputSheet = ss.insertSheet('처방입력');
-    
-    const headers = [
-      '처방일', '처방명', '차트번호', '환자명', '첩수', 
-      '성별', '나이', '생년월일', '처방의', '약재목록(자동)', '처리상태'
-    ];
-    prescInputSheet.appendRow(headers);
-    
-    const headerRange = prescInputSheet.getRange(1, 1, 1, headers.length);
-    headerRange.setBackground('#1a73e8');
-    headerRange.setFontColor('white');
-    headerRange.setFontWeight('bold');
-  }
-  
-  // 처방입력 시트에 추가
-  prescInputSheet.appendRow([
-    parsedData.prescriptionDate,
-    parsedData.prescriptionName,
-    parsedData.chartNumber,
-    parsedData.patientName,
-    parsedData.cheops,
-    parsedData.gender,
-    parsedData.age,
-    parsedData.birthDate,
-    parsedData.doctorName,
-    parsedData.herbsList,
-    '대기중'
-  ]);
-  
-  Logger.log(`✅ 처방입력 시트에 추가: ${parsedData.patientName} - ${parsedData.prescriptionName}`);
-  
-  // 2. 처방상세 시트 처리
-  let prescDetailSheet = ss.getSheetByName('처방상세');
-  
-  if (!prescDetailSheet) {
-    prescDetailSheet = ss.insertSheet('처방상세');
-    
-    const headers = [
-      '처방전번호', '처방명', '처방일', '환자명', '차트번호', 
-      '약재명', '용량(g/첩)', '첩수', '총수량(g)', '조제완료'
-    ];
-    prescDetailSheet.appendRow(headers);
-    
-    const headerRange = prescDetailSheet.getRange(1, 1, 1, headers.length);
-    headerRange.setBackground('#1a73e8');
-    headerRange.setFontColor('white');
-    headerRange.setFontWeight('bold');
-  }
-  
-  // 각 약재를 처방상세 시트에 추가
-  parsedData.herbs.forEach(herb => {
-    prescDetailSheet.appendRow([
-      parsedData.prescriptionNumber,
-      parsedData.prescriptionName,
-      parsedData.prescriptionDate,
-      parsedData.patientName,
-      parsedData.chartNumber,
-      herb.name,
-      herb.amountPerCheop,
-      parsedData.cheops,
-      herb.totalAmount,
-      false  // 조제완료 체크박스
-    ]);
-  });
-  
-  // 조제완료 체크박스 추가
-  const lastRow = prescDetailSheet.getLastRow();
-  const firstRow = lastRow - parsedData.herbs.length + 1;
-  const checkboxRange = prescDetailSheet.getRange(firstRow, 10, parsedData.herbs.length, 1);
-  checkboxRange.insertCheckboxes();
-  checkboxRange.setHorizontalAlignment('center');
-  
-  Logger.log(`✅ 처방상세 시트에 ${parsedData.herbs.length}개 약재 추가`);
-}
-
 // ========================================
 // 📤 처방 자동화 - PART 2: FIFO 자동 차감
 // ========================================
@@ -3001,7 +2916,10 @@ function addPrescriptionToSheet(parsedData) {
     ]);
     
     Logger.log(`✅ [OCR] 처방입력: ${prescriptionNumber} - ${parsedData.patientName}`);
-    
+
+    // 처방상세 시트에 약재 정보 추가
+    addPrescriptionDetailsToSheet(prescriptionNumber, parsedData);
+
     // ✅ OCR 데이터도 EMR 동기화
     if (parsedData.chartNumber && parsedData.patientName) {
       try {
