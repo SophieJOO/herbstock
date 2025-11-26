@@ -1134,8 +1134,94 @@ function onEdit(e) {
       onPrescriptionEdit(e);
     }
 
+    // 처방입력 시트의 처방전번호(A열) 수정 시 처방상세 시트도 업데이트
+    if (sheet.getName() === '처방입력' && range.getColumn() === 1 && range.getRow() > 1) {
+      syncPrescriptionNumberToDetails(e);
+    }
+
   } catch (error) {
     Logger.log('❌ onEdit 오류: ' + error.message);
+  }
+}
+
+/**
+ * 처방입력 시트의 처방전번호 수정 시 처방상세 시트도 동기화
+ */
+function syncPrescriptionNumberToDetails(e) {
+  try {
+    const sheet = e.source.getActiveSheet();
+    const row = e.range.getRow();
+    const oldValue = e.oldValue || '';
+    const newValue = e.value || '';
+
+    // 값이 같으면 무시
+    if (oldValue === newValue) {
+      return;
+    }
+
+    Logger.log(`🔄 처방전번호 변경 감지: ${row}행, "${oldValue}" → "${newValue}"`);
+
+    // 처방상세 시트에서 이전 번호를 찾아서 새 번호로 업데이트
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const detailSheet = ss.getSheetByName('처방상세');
+
+    if (!detailSheet) {
+      Logger.log('⚠️ 처방상세 시트를 찾을 수 없습니다.');
+      return;
+    }
+
+    const detailData = detailSheet.getDataRange().getValues();
+    let updatedCount = 0;
+
+    // 이전 번호가 없는 경우, 같은 행의 환자명과 처방일로 매칭
+    if (!oldValue || oldValue.trim() === '') {
+      const patientName = sheet.getRange(row, 5).getValue(); // E열: 환자명
+      const prescriptionDate = sheet.getRange(row, 2).getValue(); // B열: 처방일
+
+      Logger.log(`  이전 번호 없음 → 환자명(${patientName})과 처방일(${prescriptionDate})로 매칭 시도`);
+
+      for (let i = 1; i < detailData.length; i++) {
+        const detailRow = i + 1;
+        const detailPrescNumber = detailData[i][0]; // A열: 처방전번호
+        const detailPatientName = detailData[i][3]; // D열: 환자명
+        const detailPrescDate = detailData[i][2]; // C열: 처방일
+
+        // 처방전번호가 공란이고, 환자명과 처방일이 일치하는 경우
+        if ((!detailPrescNumber || detailPrescNumber.toString().trim() === '') &&
+            detailPatientName === patientName &&
+            detailPrescDate.toString() === prescriptionDate.toString()) {
+          detailSheet.getRange(detailRow, 1).setValue(newValue);
+          updatedCount++;
+          Logger.log(`  ✅ ${detailRow}행 업데이트: "${detailPrescNumber}" → "${newValue}"`);
+        }
+      }
+    } else {
+      // 이전 번호가 있는 경우, 이전 번호로 매칭
+      for (let i = 1; i < detailData.length; i++) {
+        const detailRow = i + 1;
+        const detailPrescNumber = detailData[i][0]; // A열: 처방전번호
+
+        if (detailPrescNumber === oldValue) {
+          detailSheet.getRange(detailRow, 1).setValue(newValue);
+          updatedCount++;
+          Logger.log(`  ✅ ${detailRow}행 업데이트: "${oldValue}" → "${newValue}"`);
+        }
+      }
+    }
+
+    if (updatedCount > 0) {
+      Logger.log(`✅ 처방상세 시트 ${updatedCount}개 행 업데이트 완료`);
+      SpreadsheetApp.getActive().toast(
+        `처방상세 시트 ${updatedCount}개 행 업데이트 완료`,
+        '처방전번호 동기화',
+        3
+      );
+    } else {
+      Logger.log('⚠️ 업데이트할 행을 찾지 못했습니다.');
+    }
+
+  } catch (error) {
+    Logger.log('❌ 처방전번호 동기화 오류: ' + error.message);
   }
 }
 
@@ -2918,8 +3004,19 @@ function addPrescriptionToSheet(parsedData) {
   
   if (isOCR) {
     // ===== OCR 데이터 처리 =====
-    prescriptionNumber = parsedData.prescriptionNumber || '';
-    
+    // 처방전번호가 없으면 자동 생성 (타임스탬프 기반)
+    if (!parsedData.prescriptionNumber || parsedData.prescriptionNumber.trim() === '') {
+      const timestamp = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        'yyyyMMddHHmmss'
+      );
+      prescriptionNumber = `P${timestamp}`;
+      Logger.log(`⚠️ 처방전번호 없음 → 자동 생성: ${prescriptionNumber}`);
+    } else {
+      prescriptionNumber = parsedData.prescriptionNumber;
+    }
+
     prescSheet.appendRow([
       prescriptionNumber,                   // A: 처방전번호
       parsedData.prescriptionDate || '',    // B: 처방일
@@ -2974,8 +3071,18 @@ function addPrescriptionToSheet(parsedData) {
     
   } else {
     // ===== EMR 데이터 처리 =====
+    // 처방전번호가 없으면 자동 생성 (타임스탬프 기반)
     prescriptionNumber = parsedData.visitNumber || parsedData.prescriptionNumber || '';
-    
+    if (!prescriptionNumber || prescriptionNumber.trim() === '') {
+      const timestamp = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        'yyyyMMddHHmmss'
+      );
+      prescriptionNumber = `P${timestamp}`;
+      Logger.log(`⚠️ 처방전번호 없음 → 자동 생성: ${prescriptionNumber}`);
+    }
+
     prescSheet.appendRow([
       prescriptionNumber,                   // A: 처방전번호
       parsedData.prescriptionDate || parsedData.visitDateTime || '', // B: 처방일
